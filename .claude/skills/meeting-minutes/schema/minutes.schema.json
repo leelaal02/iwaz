@@ -2,12 +2,13 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Meeting Minutes",
   "type": "object",
-  "required": ["title", "date", "attendees", "discussion", "decisions", "action_items", "next_meeting"],
+  "required": ["title", "date", "attendees", "purpose", "discussion", "decisions", "action_items", "next_meeting", "notes"],
   "additionalProperties": false,
   "properties": {
     "title": { "type": "string" },
     "date": { "type": ["string", "null"] },
     "attendees": { "type": "array", "items": { "type": "string" } },
+    "purpose": { "type": ["string", "null"] },
     "discussion": {
       "type": "array",
       "items": {
@@ -34,6 +35,7 @@
         }
       }
     },
-    "next_meeting": { "type": ["string", "null"] }
+    "next_meeting": { "type": ["string", "null"] },
+    "notes": { "type": "array", "items": { "type": "string" } }
   }
 }

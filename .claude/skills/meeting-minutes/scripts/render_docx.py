@@ -19,6 +19,9 @@ def render_docx(data: dict, out_path: str) -> None:
     else:
         doc.add_paragraph("(없음)")
 
+    doc.add_heading("회의 목적", level=1)
+    doc.add_paragraph(data["purpose"] or "(없음)")
+
     doc.add_heading("논의 내용", level=1)
     if data["discussion"]:
         for item in data["discussion"]:
@@ -51,6 +54,13 @@ def render_docx(data: dict, out_path: str) -> None:
 
     doc.add_heading("다음 회의 일정", level=1)
     doc.add_paragraph(data["next_meeting"] or "(미정)")
+
+    doc.add_heading("기타·특이사항", level=1)
+    if data["notes"]:
+        for n in data["notes"]:
+            doc.add_paragraph(n, style="List Bullet")
+    else:
+        doc.add_paragraph("(없음)")
 
     doc.save(out_path)
 

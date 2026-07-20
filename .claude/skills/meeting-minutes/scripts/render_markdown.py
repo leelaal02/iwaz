@@ -17,6 +17,10 @@ def render_markdown(data: dict) -> str:
         lines.append("- (없음)")
     lines.append("")
 
+    lines.append("## 회의 목적")
+    lines.append(data["purpose"] or "(없음)")
+    lines.append("")
+
     lines.append("## 논의 내용")
     if data["discussion"]:
         for item in data["discussion"]:
@@ -48,6 +52,13 @@ def render_markdown(data: dict) -> str:
 
     lines.append("## 다음 회의 일정")
     lines.append(data["next_meeting"] or "(미정)")
+    lines.append("")
+
+    lines.append("## 기타·특이사항")
+    if data["notes"]:
+        lines.extend(f"- {n}" for n in data["notes"])
+    else:
+        lines.append("- (없음)")
     lines.append("")
 
     return "\n".join(lines)

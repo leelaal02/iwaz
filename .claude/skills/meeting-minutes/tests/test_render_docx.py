@@ -26,7 +26,8 @@ def test_headings_present(tmp_path):
     render_docx(_sample(), str(out))
     doc = Document(str(out))
     texts = [p.text for p in doc.paragraphs]
-    for heading in ["참석자", "논의 내용", "결정 사항", "Action Items", "다음 회의 일정"]:
+    for heading in ["참석자", "회의 목적", "논의 내용", "결정 사항",
+                    "Action Items", "다음 회의 일정", "기타·특이사항"]:
         assert heading in texts
 
 

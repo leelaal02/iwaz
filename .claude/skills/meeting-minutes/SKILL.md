@@ -44,9 +44,10 @@ STT 라이브러리 미설치나 `GROQ_API_KEY` 미설정 시, 명령이 안내 
 ### [2] 추출 (이 단계는 네가 직접 수행)
 회의 원문을 읽고 `schema/minutes.schema.json`을 **정확히** 따르는
 `minutes.json`을 작성한다. 규칙:
-- 6개 항목을 모두 채운다: title, date, attendees, discussion, decisions, action_items, next_meeting.
-- 원문에 없는 정보는 **지어내지 않는다**. 없으면 `null`(date/next_meeting/owner/due) 또는 빈 배열.
+- 9개 항목을 모두 채운다: title, date, attendees, purpose, discussion, decisions, action_items, next_meeting, notes.
+- 원문에 없는 정보는 **지어내지 않는다**. 없으면 `null`(date/purpose/next_meeting/owner/due) 또는 빈 배열(attendees/decisions/action_items/notes).
 - `discussion`은 주제별로 `{topic, points}`로 묶는다.
+- `purpose`는 이 회의를 왜 하는지(회의 목적) 한두 문장으로. `notes`는 어느 항목에도 안 들어가는 기타·특이사항을 배열로.
 - 결과를 `output/minutes.json`으로 저장한다.
 
 검증: `render_markdown.py`/`render_docx.py`가 `load_minutes()`로 로드하며
