@@ -15,8 +15,8 @@
 | 항목 | 결정 | 이유 |
 |---|---|---|
 | 텍스트 입력 | 기존 `normalize_input.py` 재사용 | 이미 완성·검증됨 |
-| 로컬 STT | **faster-whisper** | pip 설치로 동작, 로컬 오프라인, 한국어 우수 (사용자 테스트 중 확정) |
-| 클라우드 STT | **Groq Whisper API** (`whisper-large-v3`) | 초고속 Whisper API, `GROQ_API_KEY`만 필요 |
+| 로컬 STT | **faster-whisper** (`medium`, `cpu_threads=4`) | pip 설치로 동작, 로컬 오프라인, 한국어 우수 (사용자 테스트 중 확정) |
+| 클라우드 STT | **Groq Whisper API** (`whisper-large-v3`, 키 발급 완료) | 초고속 Whisper API, `GROQ_API_KEY`만 필요 |
 | 화자 분리 | **미지원 (순수 통문장 텍스트)** | 두 STT 모두 Whisper 기반이라 diarization 없음. 필요 시 별도 확장 |
 | 어댑터 선택 | **명시적 소스 지정** `--source text\|whisper\|groq` | 추가·삭제가 한 줄, 어느 STT를 쓸지 명확 |
 | 의존성 | `requirements-stt.txt`로 **선택적 분리** | 텍스트만 쓰는 사용자는 무거운 STT 패키지 불필요 |
@@ -129,7 +129,7 @@ python scripts/transcribe.py --source groq    회의.m4a   > output/meeting.txt
 
 ### 7.2 whisper_local (`adapters/whisper_local.py`)
 - `faster_whisper.WhisperModel`을 lazy import.
-- 모델 크기 기본값(예: `base`)은 `opts`로 조정 가능. `language="ko"` 기본.
+- 모델 크기 기본값 **`medium`**, **`cpu_threads=4`** (둘 다 `opts`로 조정 가능). `language="ko"` 기본.
 - 세그먼트 텍스트를 이어 붙여 통문장 생성 후 `_normalize()` 적용.
 - `faster-whisper` 미설치 시 설치 안내 메시지와 함께 명확한 오류.
 
