@@ -27,7 +27,9 @@ def main() -> None:
     )
     parser.add_argument("input", help="텍스트 문자열, .txt 경로, 또는 오디오 파일 경로")
     args = parser.parse_args()
-    sys.stdout.write(run(args.source, args.input))
+    # 플랫폼 콘솔 인코딩(예: Windows cp949)에 무관하게 UTF-8로 출력.
+    # 리다이렉트(> output/meeting.txt) 결과가 하위 단계에서 UTF-8로 읽히도록 보장.
+    sys.stdout.buffer.write(run(args.source, args.input).encode("utf-8"))
 
 
 if __name__ == "__main__":

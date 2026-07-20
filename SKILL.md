@@ -15,10 +15,20 @@ description: Use when the user provides meeting notes, a transcript, or STT outp
 
 ## 단계별 절차
 
-### [1] 입력 정규화
-사용자의 회의 원문(붙여넣은 텍스트 또는 .txt 경로)을 확보한다.
-정규화가 필요하면 `scripts/normalize_input.py`의 `load_meeting_text(source)`를
-사용하거나, 텍스트를 직접 다음 단계로 넘긴다.
+### [1] 입력 확보 (텍스트 / 로컬 STT / 클라우드 STT)
+사용자가 준 입력의 종류에 따라 소스를 고른다.
+
+- **텍스트**(붙여넣은 내용 또는 `.txt` 경로): `--source text`
+- **오디오 파일**: 로컬/클라우드 중 무엇을 쓸지 사용자에게 확인한다.
+  - 로컬(오프라인, `pip install -r requirements-stt.txt` 필요): `--source whisper`
+  - 클라우드(Groq, `GROQ_API_KEY` 필요): `--source groq`
+
+정규화된 회의 텍스트를 얻는다:
+`python scripts/transcribe.py --source <text|whisper|groq> <입력> > output/meeting.txt`
+
+이 표준 출력(정규화된 회의 원문)을 [2] 추출 단계의 입력으로 사용한다.
+STT 라이브러리 미설치나 `GROQ_API_KEY` 미설정 시, 명령이 안내 메시지와 함께
+실패하므로 사용자에게 그대로 전달해 설치/설정을 요청한다.
 
 ### [2] 추출 (이 단계는 네가 직접 수행)
 회의 원문을 읽고 `schema/minutes.schema.json`을 **정확히** 따르는
@@ -41,6 +51,7 @@ description: Use when the user provides meeting notes, a transcript, or STT outp
 `python scripts/render_docx.py output/minutes.json output/minutes.docx`
 최종 `.docx` 경로를 사용자에게 안내한다.
 
-## 확장 (STT)
-STT 입력은 현재 미지원. 추가 시 `scripts/normalize_input.py`의
-`load_from_stt(audio_path)`만 구현하면 [2]~[4]는 수정 불필요.
+## 확장 (입력 어댑터)
+입력 방식 추가: `scripts/adapters/`에 `transcribe(source, **opts) -> str`를
+구현한 모듈을 만들고 `scripts/adapters/__init__.py`의 `REGISTRY`에 한 줄 등록.
+삭제: REGISTRY에서 한 줄 제거 + 모듈 삭제. [2]~[4] 단계는 수정 불필요.
