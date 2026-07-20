@@ -8,9 +8,18 @@ description: Use when the user provides meeting notes, a transcript, or STT outp
 텍스트 회의 내용을 구조화된 회의록(Markdown + Word .docx)으로 변환한다.
 파이프라인은 4단계이며 각 단계의 계약은 `schema/minutes.schema.json`이다.
 
+## 경로 규칙 (중요)
+
+아래 명령의 `scripts/`·`schema/`·`requirements*.txt`는 모두 **이 SKILL.md가 있는
+스킬 디렉토리** 기준 경로다. 실행할 때는 스킬 디렉토리 기준 절대경로로 바꿔서 실행한다.
+(이 저장소에서는 스킬 디렉토리가 `.claude/skills/meeting-minutes/` 이므로
+예: `python .claude/skills/meeting-minutes/scripts/transcribe.py ...`)
+반면 `output/`은 **사용자의 현재 작업 디렉토리** 기준이다 — 산출물은 사용자 프로젝트에 남긴다.
+
 ## 사전 준비
 
 의존성 설치(최초 1회): `pip install -r requirements.txt`
+(오디오 STT를 쓸 때만 추가로: `pip install -r requirements-stt.txt`)
 출력 폴더 준비: `output/` 이 없으면 만든다 (`mkdir output`).
 
 ## 단계별 절차
