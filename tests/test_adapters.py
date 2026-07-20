@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from adapters.text import transcribe as text_transcribe
-from adapters import whisper_local
+from adapters import whisper_local, groq_cloud
 
 SAMPLE_TXT = Path(__file__).resolve().parent.parent / "examples" / "sample_meeting.txt"
 
@@ -42,4 +42,43 @@ def test_whisper_adapter_missing_library(monkeypatch):
     monkeypatch.setitem(sys.modules, "faster_whisper", None)
     with pytest.raises(ImportError) as exc:
         whisper_local._load_model()
+    assert "requirements-stt.txt" in str(exc.value)
+
+
+class _FakeTranscription:
+    text = "첫 줄  \n\n\n둘째 줄  "
+
+
+class _FakeAudio:
+    class transcriptions:
+        @staticmethod
+        def create(**kwargs):
+            return _FakeTranscription()
+
+
+class _FakeGroqClient:
+    audio = _FakeAudio()
+
+
+def test_groq_adapter_normalizes(monkeypatch, tmp_path):
+    audio = tmp_path / "a.m4a"
+    audio.write_bytes(b"fake")
+    monkeypatch.setattr(groq_cloud, "_client", lambda: _FakeGroqClient())
+    result = groq_cloud.transcribe(str(audio))
+    assert result == "첫 줄\n\n둘째 줄"
+
+
+def test_groq_adapter_missing_api_key(monkeypatch):
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    # groq 라이브러리 존재 여부와 무관하게 키 미설정을 먼저 안내
+    with pytest.raises(RuntimeError) as exc:
+        groq_cloud._client()
+    assert "GROQ_API_KEY" in str(exc.value)
+
+
+def test_groq_adapter_missing_library(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "dummy")
+    monkeypatch.setitem(sys.modules, "groq", None)
+    with pytest.raises(ImportError) as exc:
+        groq_cloud._client()
     assert "requirements-stt.txt" in str(exc.value)

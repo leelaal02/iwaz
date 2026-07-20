@@ -7,13 +7,12 @@ STT 어댑터 모듈은 top-level에서 무거운 라이브러리를 import하�
 (faster_whisper/groq는 각 transcribe 함수 내부에서 lazy import),
 이 패키지를 import해도 STT 미설치 상태에서 안전하다.
 """
-from adapters import text, whisper_local
-# from adapters import groq_cloud  # Task 3에서 활성화
+from adapters import text, whisper_local, groq_cloud
 
 REGISTRY = {
     "text": text.transcribe,
     "whisper": whisper_local.transcribe,
-    # "groq": groq_cloud.transcribe,  # Task 3
+    "groq": groq_cloud.transcribe,
 }
 
 
