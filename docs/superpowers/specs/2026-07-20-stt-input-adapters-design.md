@@ -15,8 +15,9 @@
 | 항목 | 결정 | 이유 |
 |---|---|---|
 | 텍스트 입력 | 기존 `normalize_input.py` 재사용 | 이미 완성·검증됨 |
-| 로컬 STT | **faster-whisper** (`medium`, `cpu_threads=4`) | pip 설치로 동작, 로컬 오프라인, 한국어 우수 (사용자 테스트 중 확정) |
-| 클라우드 STT | **Groq Whisper API** (`whisper-large-v3`, 키 발급 완료) | 초고속 Whisper API, `GROQ_API_KEY`만 필요 |
+| 로컬 STT | **faster-whisper** (`WhisperModel("medium", cpu_threads=4)`) | pip 설치로 동작, 로컬 오프라인, 한국어 우수 (사용자 테스트 중 확정) |
+| 클라우드 STT | **Groq Whisper API** (`whisper-large-v3`) | 초고속 Whisper API, `GROQ_API_KEY`만 필요 |
+| 실행 주체 | 사용자는 `/meeting-minutes` 호출, **Claude가 SKILL.md 지시로 헬퍼 실행** | Harness 패턴. 사용자가 직접 `python`을 치지 않음 |
 | 화자 분리 | **미지원 (순수 통문장 텍스트)** | 두 STT 모두 Whisper 기반이라 diarization 없음. 필요 시 별도 확장 |
 | 어댑터 선택 | **명시적 소스 지정** `--source text\|whisper\|groq` | 추가·삭제가 한 줄, 어느 STT를 쓸지 명확 |
 | 의존성 | `requirements-stt.txt`로 **선택적 분리** | 텍스트만 쓰는 사용자는 무거운 STT 패키지 불필요 |
@@ -109,7 +110,22 @@ metting/
 
 ★ = 이번 작업에서 추가/수정. 표시 없는 항목은 불변.
 
-## 6. CLI 사용법
+## 6. 실행 방식 — 사용자는 CLI를 직접 치지 않는다
+
+사용자 관점의 진입점은 오직 **`/meeting-minutes` 스킬 호출**이다. `transcribe.py`는 사용자가 아니라 **Claude가 [1] 단계에서 실행하는 결정적 헬퍼**이며, 이는 기존 [3]`render_markdown.py`·[4]`render_docx.py`와 동일한 Harness 패턴이다.
+
+```
+사용자:  /meeting-minutes  (+ 오디오 또는 텍스트 제공)
+   │
+   ▼
+Claude가 SKILL.md 지시대로 오케스트레이션:
+   [1] transcribe.py 실행       → 정규화된 회의 텍스트
+   [2] 텍스트 → minutes.json    (Claude가 직접 추출)
+   [3] render_markdown.py 실행  → 미리보기·검토
+   [4] render_docx.py 실행      → 최종 .docx
+```
+
+Claude가 [1]에서 실제로 실행하는 명령 형태 (내부 헬퍼):
 
 ```bash
 python scripts/transcribe.py --source text    회의.txt   > output/meeting.txt
@@ -119,7 +135,7 @@ python scripts/transcribe.py --source groq    회의.m4a   > output/meeting.txt
 
 - 표준 출력으로 정규화된 회의 텍스트를 내보내며, 이를 [2] 추출 단계로 넘긴다.
 - `--source` 미지정 시 기본값은 `text`.
-- SKILL.md의 [1] 단계 지시문에 세 소스 사용법을 반영한다.
+- 소스 판별: SKILL.md의 [1] 단계 지시문이 "오디오 파일이면 로컬/클라우드 중 무엇을 쓸지 사용자에게 확인, 텍스트면 `text`"를 Claude에게 안내한다.
 
 ## 7. 어댑터별 구현 요지
 
@@ -129,7 +145,7 @@ python scripts/transcribe.py --source groq    회의.m4a   > output/meeting.txt
 
 ### 7.2 whisper_local (`adapters/whisper_local.py`)
 - `faster_whisper.WhisperModel`을 lazy import.
-- 모델 크기 기본값 **`medium`**, **`cpu_threads=4`** (둘 다 `opts`로 조정 가능). `language="ko"` 기본.
+- 기본 설정: `WhisperModel("medium", cpu_threads=4)`, 전사 시 `language="ko"`. 모델 크기·스레드 수는 `opts`로 조정 가능.
 - 세그먼트 텍스트를 이어 붙여 통문장 생성 후 `_normalize()` 적용.
 - `faster-whisper` 미설치 시 설치 안내 메시지와 함께 명확한 오류.
 
