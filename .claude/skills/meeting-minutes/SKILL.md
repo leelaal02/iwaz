@@ -31,6 +31,8 @@ description: Use when the user provides meeting notes, a transcript, or STT outp
 - **오디오 파일**: 로컬/클라우드 중 무엇을 쓸지 사용자에게 확인한다.
   - 로컬(오프라인, `pip install -r requirements-stt.txt` 필요): `--source whisper`
   - 클라우드(Groq, `GROQ_API_KEY` 필요): `--source groq`
+    - 키는 작업 디렉토리의 `.env`에 `GROQ_API_KEY=...`로 두면 `transcribe.py`가
+      자동 로드한다(`.env`는 .gitignore 대상). 실제 환경변수가 있으면 그쪽이 우선.
 
 정규화된 회의 텍스트를 얻는다:
 `python scripts/transcribe.py --source <text|whisper|groq> <입력> > output/meeting.txt`

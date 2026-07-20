@@ -9,9 +9,31 @@
     python scripts/transcribe.py --source groq    회의.m4a
 """
 import argparse
+import os
 import sys
+from pathlib import Path
 
 from adapters import get_adapter, available_sources
+
+
+def _load_env_file(path: str = ".env") -> None:
+    """작업 디렉토리의 .env(단순 KEY=VALUE 형식)를 읽어 os.environ에 주입.
+
+    - 이미 설정된 실제 환경변수는 덮지 않는다(setdefault).
+    - 빈 줄·`#` 주석·`=` 없는 줄은 무시. 값의 감싼 따옴표는 제거.
+    - 파일이 없으면 아무것도 하지 않는다.
+    비밀 키(GROQ_API_KEY 등)를 커밋 없이 로컬 파일로 관리하기 위함. `.env`는
+    반드시 .gitignore에 두어야 한다.
+    """
+    p = Path(path)
+    if not p.exists():
+        return
+    for raw in p.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        os.environ.setdefault(key.strip(), val.strip().strip('"').strip("'"))
 
 
 def run(source_name: str, source: str, **opts) -> str:
@@ -20,6 +42,7 @@ def run(source_name: str, source: str, **opts) -> str:
 
 
 def main() -> None:
+    _load_env_file()  # cwd의 .env에서 GROQ_API_KEY 등 로드
     parser = argparse.ArgumentParser(description="회의 입력 → 정규화된 회의 텍스트")
     parser.add_argument(
         "--source", default="text", choices=available_sources(),

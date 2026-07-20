@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 .pytest_cache/
 output/
+# 비밀 키 — 절대 커밋 금지 (.env.example만 커밋)
+.env
