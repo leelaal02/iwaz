@@ -62,6 +62,9 @@ def render_docx(data: dict, out_path: str) -> None:
     else:
         doc.add_paragraph("(없음)")
 
+    # 표 행이 페이지 끝에서 자동으로 나뉘도록 보정한 뒤 저장.
+    from docx_postprocess import allow_rows_to_break
+    allow_rows_to_break(doc)
     doc.save(out_path)
 
 

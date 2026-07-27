@@ -96,13 +96,25 @@ def resolve_input_path(source: str, *, must_exist: bool = False):
     return None
 
 
+def _looks_like_path(source: str) -> bool:
+    """source를 파일 경로 후보로 볼지 판단.
+
+    파일 경로에는 개행이 없고 길이도 OS 한도(약 260자) 안이다. 붙여넣은 회의
+    원문(여러 줄이거나 매우 긴 문자열)까지 경로로 해석하면, 매번 공통 폴더를
+    재귀 탐색(os.walk)하는 낭비가 생기고 원문 끝부분이 우연히 실제 파일명과
+    겹치면 엉뚱한 파일을 읽는다. 이 특징으로 경로 후보만 걸러낸다.
+    """
+    s = source.strip()
+    return bool(s) and "\n" not in s and "\r" not in s and len(s) <= 260
+
+
 def load_meeting_text(source: str) -> str:
     """텍스트 문자열 또는 .txt 파일 경로를 정규화된 회의 원문으로 변환.
 
-    - source가 (작업 폴더 밖이라도) 파일로 해석되면 파일 내용을 읽음.
+    - source가 경로 후보이고 (작업 폴더 밖이라도) 파일로 해석되면 파일 내용을 읽음.
     - 그렇지 않으면 source 자체를 원문 텍스트로 간주.
     """
-    resolved = resolve_input_path(source, must_exist=False)
+    resolved = resolve_input_path(source, must_exist=False) if _looks_like_path(source) else None
     if resolved is not None:
         text = resolved.read_text(encoding="utf-8")
     else:

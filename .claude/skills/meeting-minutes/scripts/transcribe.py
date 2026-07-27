@@ -28,7 +28,9 @@ def _load_env_file(path: str = ".env") -> None:
     p = Path(path)
     if not p.exists():
         return
-    for raw in p.read_text(encoding="utf-8").splitlines():
+    # utf-8-sig: Windows 메모장으로 저장한 .env의 BOM을 제거해 첫 줄 키가
+    # '﻿GROQ_API_KEY'로 깨지지 않게 한다.
+    for raw in p.read_text(encoding="utf-8-sig").splitlines():
         line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue

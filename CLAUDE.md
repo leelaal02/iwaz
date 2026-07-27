@@ -24,7 +24,7 @@ Harness Engineering을 적용한 **회의록 자동 생성 Skill**. 텍스트 �
 - **입력 계층**: 텍스트 / 로컬 STT(faster-whisper) / 클라우드 STT(Groq)를 플러그인 어댑터로 지원(`scripts/adapters/`, `REGISTRY`). 공통 인터페이스 `transcribe(source, **opts) -> str`로 정규화 텍스트를 반환하므로, 새 입력 방식을 추가/삭제해도 하위 단계(분석/생성/출력)는 수정 불필요.
 - **분석/추출 계층**: 반드시 위 9개 항목(회의 제목 / 회의 일시 / 참석자 / 회의 목적 / 회의 내용 / 결정 사항 / 실행 항목 / 다음 회의 / 기타·특이사항)을 추출. 이 항목 목록이 회의록 스키마(`schema/minutes.schema.json`)의 단일 기준(source of truth)이며, Markdown·docx 양쪽 렌더러가 동일 스키마를 소비.
 - **Markdown 생성 계층**: 최종 산출물의 중간 표현. **먼저 Markdown으로 생성**한 뒤 이를 기반으로 docx를 만든다 — Markdown을 건너뛰고 곧바로 docx를 만들지 말 것.
-- **출력 계층**: Markdown → Word(.docx) 변환. 다른 출력 포맷을 추가하더라도 분석/추출 계층은 재사용되어야 함.
+- **출력 계층**: Markdown → Word(.docx) 변환. 사용자 양식(.docx)이 있으면 그 양식에 맞춰 출력 — 토큰이 든 양식은 그대로 채우고, 토큰이 없는 **표·문단 양식은 9항목을 자동 매핑**해 채운다(상세 절차·토큰 규칙은 SKILL.md [4] 참고). 다른 출력 포맷을 추가하더라도 분석/추출 계층은 재사용되어야 함.
 
 ## Design Rules (하드 제약)
 
@@ -39,9 +39,12 @@ Harness Engineering을 적용한 **회의록 자동 생성 Skill**. 텍스트 �
 
 - 필요 패키지 설치: `pip install -r .claude/skills/meeting-minutes/requirements.txt` (오디오 STT는 `requirements-stt.txt` 추가)
 - 테스트: `python -m pytest .claude/skills/meeting-minutes/tests -q`
-- 파이프라인은 `/meeting-minutes` 호출 시 Claude가 SKILL.md 지시대로 헬퍼를 실행:
-  - [1] `python .claude/skills/meeting-minutes/scripts/transcribe.py --source <text|whisper|groq> <입력> > output/meeting.txt`
-  - [3] `python .claude/skills/meeting-minutes/scripts/render_markdown.py output/minutes.json output/minutes.md`
-  - [4] `python .claude/skills/meeting-minutes/scripts/render_docx.py output/minutes.json output/minutes.docx`
+- 파이프라인은 `/meeting-minutes` 호출 시 Claude가 SKILL.md 지시대로 헬퍼를 실행
+  (중간 파일은 `output/.work/`에, 최종 docx만 `output/회의록_<제목>_<생성일>.docx`에 — 아래 위치 규칙 참고):
+  - [1] `python .claude/skills/meeting-minutes/scripts/transcribe.py --source <text|whisper|groq> <입력> > output/.work/meeting.txt`
+  - [3] `python .claude/skills/meeting-minutes/scripts/render_markdown.py output/.work/minutes.json output/.work/minutes.md`
+  - [4] 파일명은 `output_naming.py`로 구한 뒤 `python .claude/skills/meeting-minutes/scripts/render_docx.py output/.work/minutes.json output/<최종.docx>`
 
-산출물은 사용자 작업 디렉토리의 `output/`에 생성.
+산출물은 사용자 작업 디렉토리의 `output/`에 생성. **최종본(`회의록_<제목>_<생성일>.docx`)만
+`output/`에 남기고, 중간 파일(STT 원문·`minutes.json`·`minutes.md`·양식 구조·매핑·토큰화 중간
+docx 등)은 모두 `output/.work/`에 둔다** — 파일명·위치 규칙 상세는 SKILL.md "산출물 위치 규칙" 참고.

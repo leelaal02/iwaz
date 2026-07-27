@@ -42,6 +42,25 @@ def test_null_due_rendered_as_dash():
     assert "| 샘플 회의 원문 수집 | 박서연 | - |" in md
 
 
+def test_table_cell_escapes_pipe_and_newline():
+    """할 일/담당자/기한에 든 `|`·개행이 표를 깨뜨리지 않도록 이스케이프된다."""
+    data = _sample()
+    data["action_items"] = [
+        {"task": "A안 | B안 비교", "owner": "김수민\n(대행 이정우)", "due": "-"},
+    ]
+    md = render_markdown(data)
+    # 파이프는 \| 로 이스케이프, 개행은 공백으로 → 데이터 행이 정확히 3열을 유지
+    row = next(
+        line for line in md.splitlines()
+        if line.startswith("|") and "A안" in line
+    )
+    assert row == r"| A안 \| B안 비교 | 김수민 (대행 이정우) | - |"
+    # 실제 셀(열) 개수 검증: 양끝 빈 항목 제외 3개, 이스케이프된 \| 는 열로 세지 않음
+    import re
+    cells = [c for c in re.split(r"(?<!\\)\|", row)[1:-1]]
+    assert len(cells) == 3
+
+
 def test_empty_and_null_fields():
     data = _sample()
     data["attendees"] = []

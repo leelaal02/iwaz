@@ -4,6 +4,20 @@ import sys
 from validate import load_minutes
 
 
+def _md_cell(value: str) -> str:
+    """Markdown 표 셀용 이스케이프.
+
+    셀 값에 `|`가 있으면 가짜 열이 생기고, 개행이 있으면 행이 끊겨 표가 깨진다.
+    파이프는 `\\|`로 이스케이프하고 개행은 공백으로 바꿔 한 셀·한 행을 유지한다.
+    """
+    return (
+        value.replace("|", "\\|")
+        .replace("\r\n", " ")
+        .replace("\n", " ")
+        .replace("\r", " ")
+    )
+
+
 def render_markdown(data: dict) -> str:
     lines = [f"# {data['title']}", ""]
     if data.get("date"):
@@ -43,9 +57,10 @@ def render_markdown(data: dict) -> str:
         lines.append("| 할 일 | 담당자 | 기한 |")
         lines.append("| --- | --- | --- |")
         for a in data["action_items"]:
-            owner = a["owner"] or "-"
-            due = a["due"] or "-"
-            lines.append(f"| {a['task']} | {owner} | {due} |")
+            task = _md_cell(a["task"])
+            owner = _md_cell(a["owner"] or "-")
+            due = _md_cell(a["due"] or "-")
+            lines.append(f"| {task} | {owner} | {due} |")
     else:
         lines.append("(없음)")
     lines.append("")

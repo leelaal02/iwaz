@@ -82,3 +82,21 @@ def test_load_meeting_text_literal_string_still_works(tmp_path, monkeypatch):
     monkeypatch.setenv("MEETING_INPUT_DIRS", str(tmp_path))
     monkeypatch.chdir(tmp_path)
     assert load_meeting_text("그냥 회의 원문 텍스트") == "그냥 회의 원문 텍스트"
+
+
+def test_multiline_paste_not_resolved_as_path(tmp_path, monkeypatch):
+    # 여러 줄 붙여넣기의 마지막 줄이 실제 파일명과 겹쳐도 파일을 읽지 않고
+    # 붙여넣은 원문을 그대로 쓴다(경로 오탐·불필요한 os.walk 방지).
+    (tmp_path / "회의.txt").write_text("엉뚱한 파일 내용", encoding="utf-8")
+    monkeypatch.setenv("MEETING_INPUT_DIRS", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    pasted = "첫 줄 논의\n둘째 줄 결정\n회의.txt"
+    assert load_meeting_text(pasted) == pasted
+
+
+def test_singleline_filename_still_resolved(tmp_path, monkeypatch):
+    # 한 줄 파일명은 여전히 파일로 해석된다(기능 회귀 없음).
+    (tmp_path / "note2.txt").write_text("회의 내용", encoding="utf-8")
+    monkeypatch.setenv("MEETING_INPUT_DIRS", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    assert load_meeting_text("note2.txt") == "회의 내용"
