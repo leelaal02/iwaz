@@ -30,9 +30,10 @@ def _cell_texts(out_path, table=0, row=0, col=0):
 
 # --- 토큰 블록 라이브러리 단위 테스트 ---------------------------------------
 def test_inline_tokens_join():
-    assert inline_tokens(["title"]) == "{{ title }}"
-    assert inline_tokens(["date"]) == "{{ date }}"
-    assert inline_tokens(["attendees"]) == "{{ attendees_joined }}"
+    # 자동매핑 스칼라는 RichText 슬롯이므로 {{r *_rt }}로 생성한다.
+    assert inline_tokens(["title"]) == "{{r title_rt }}"
+    assert inline_tokens(["date"]) == "{{r date_rt }}"
+    assert inline_tokens(["attendees"]) == "{{r attendees_rt }}"
 
 
 def test_inline_rejects_list_field():
@@ -47,12 +48,26 @@ def test_block_single_field_no_section_label():
 
 
 def test_block_single_scalar_is_value_token():
-    assert block_lines(["purpose"]) == ["{{ purpose }}"]
+    assert block_lines(["purpose"]) == ["{{r purpose_rt }}"]
 
 
 def test_block_multi_field_adds_section_labels():
     lines = block_lines(["purpose", "next_meeting"])
-    assert lines == ["[회의 목적] {{ purpose }}", "[다음 회의] {{ next_meeting }}"]
+    assert lines == ["[회의 목적] {{r purpose_rt }}", "[다음 회의] {{r next_meeting_rt }}"]
+
+
+def test_block_discussion_uses_numbered_bold_topic():
+    lines = block_lines(["discussion"])
+    assert lines[0] == "{%p for d in discussion_rt %}"
+    assert "{{r d.topic_rt }}" in lines
+    assert " - {{ p }}" in lines
+
+
+def test_block_action_items_owner_due_are_richtext_slots():
+    lines = block_lines(["action_items"])
+    assert lines[0] == "{%p for a in action_items_rt %}"
+    body = " - {{ a.task }} (담당: {{r a.owner_rt }} / 기한: {{r a.due_rt }})"
+    assert body in lines
 
 
 def test_block_multi_list_field_prepends_label_line():
@@ -67,6 +82,145 @@ def test_unknown_field_raises():
         block_lines(["bogus"])
 
 
+# --- todo / literal 모드 -----------------------------------------------------
+def test_todo_mode_inserts_richtext_todo_token(tmp_path):
+    tpl = tmp_path / "form.docx"
+    out = tmp_path / "out.docx"
+    _make_form(tpl)  # cell(2,0)="일 시 :", 나머지 빈칸
+    apply_mapping(str(tpl), {"table": 0, "fills": [
+        {"row": 3, "col": 1, "mode": "todo"},   # 빈칸 → todo만
+        {"row": 2, "col": 0, "mode": "todo"},   # 라벨칸 → 라벨 뒤 append
+    ]}, str(out))
+    assert "{{r todo }}" in _cell_texts(out, row=3, col=1)[0]
+    label = _cell_texts(out, row=2, col=0)[0]
+    assert "일 시 :" in label and "{{r todo }}" in label
+
+
+def test_todo_mode_needs_no_fields(tmp_path):
+    tpl = tmp_path / "form.docx"
+    _make_form(tpl)
+    # fields 없이도 동작(예외 없음)
+    apply_mapping(str(tpl), {"table": 0, "fills": [
+        {"row": 3, "col": 1, "mode": "todo"},
+    ]}, str(tmp_path / "out.docx"))
+
+
+def test_todo_mode_end_to_end_red_bold_placeholder(tmp_path):
+    from render_docx_template import render_template
+    tpl = tmp_path / "form.docx"
+    tokenized = tmp_path / "form_tokenized.docx"
+    final = tmp_path / "final.docx"
+    _make_form(tpl)
+    apply_mapping(str(tpl), {"table": 0, "fills": [
+        {"row": 3, "col": 1, "mode": "todo"},
+    ]}, str(tokenized))
+    render_template(str(tokenized), _sample(), str(final))
+    cell = Document(str(final)).tables[0].rows[3].cells[1]
+    runs = [(r.text, r.bold, str(r.font.color.rgb) if r.font.color and r.font.color.rgb else None)
+            for p in cell.paragraphs for r in p.runs if r.text]
+    assert any(t == "입력필요" and b and c == "FF0000" for t, b, c in runs)
+
+
+def test_literal_mode_inserts_given_text(tmp_path):
+    tpl = tmp_path / "form.docx"
+    out = tmp_path / "out.docx"
+    _make_form(tpl)  # cell(3,0) 빈칸
+    apply_mapping(str(tpl), {"table": 0, "fills": [
+        {"row": 3, "col": 0, "mode": "literal", "text": "서울 본사 3층"},
+    ]}, str(out))
+    assert "서울 본사 3층" in _cell_texts(out, row=3, col=0)[0]
+
+
+def test_literal_mode_requires_text_key(tmp_path):
+    tpl = tmp_path / "form.docx"
+    _make_form(tpl)
+    with pytest.raises(ValueError, match="text"):
+        apply_mapping(str(tpl), {"table": 0, "fills": [
+            {"row": 3, "col": 0, "mode": "literal"},
+        ]}, str(tmp_path / "out.docx"))
+
+
+# --- row_repeats (행 반복 표) ------------------------------------------------
+def _make_action_table_form(path, merge_task=False):
+    """헤더 1행 + 빈 데이터행 1행짜리 실행항목 표 양식."""
+    doc = Document()
+    t = doc.add_table(rows=2, cols=3)
+    h = t.rows[0].cells
+    h[0].text, h[1].text, h[2].text = "할 일", "담당자", "기한"
+    if merge_task:
+        r = t.rows[1]
+        r.cells[0].merge(r.cells[1])  # 담당자 자리까지 병합(gridSpan)
+    doc.save(str(path))
+
+
+def test_row_repeats_builds_tr_structure(tmp_path):
+    tpl = tmp_path / "form.docx"
+    out = tmp_path / "out.docx"
+    _make_action_table_form(tpl)
+    apply_mapping(str(tpl), {"table": 0, "row_repeats": [
+        {"row": 1, "field": "action_items", "cols": {"task": 0, "owner": 1, "due": 2}},
+    ]}, str(out))
+    t = Document(str(out)).tables[0]
+    assert len(t.rows) == 4  # 헤더 + for행 + 데이터행 + endfor행
+    cells = [c.text for row in t.rows for c in row.cells]
+    assert any("{%tr for a in action_items_rt %}" in x for x in cells)
+    assert any("{%tr endfor %}" in x for x in cells)
+    assert "{{ a.task }}" in cells
+    assert "{{r a.owner_rt }}" in cells
+    assert "{{r a.due_rt }}" in cells
+
+
+def test_row_repeats_end_to_end_columns_and_todo(tmp_path):
+    from render_docx_template import render_template
+    tpl = tmp_path / "form.docx"
+    tokenized = tmp_path / "form_tokenized.docx"
+    final = tmp_path / "final.docx"
+    _make_action_table_form(tpl)
+    apply_mapping(str(tpl), {"table": 0, "row_repeats": [
+        {"row": 1, "field": "action_items", "cols": {"task": 0, "owner": 1, "due": 2}},
+    ]}, str(tokenized))
+    render_template(str(tokenized), _sample(), str(final))
+    t = Document(str(final)).tables[0]
+    assert len(t.rows) == 3  # 헤더 + 항목 2행
+    tasks = [t.rows[i].cells[0].text for i in (1, 2)]
+    assert "python-docx 렌더러 PoC 작성" in tasks
+    assert "샘플 회의 원문 수집" in tasks
+    # due=null 항목의 기한 칸 → 빨간 "입력필요"
+    for i in (1, 2):
+        if t.rows[i].cells[0].text == "샘플 회의 원문 수집":
+            due = t.rows[i].cells[2]
+            runs = [(r.text, r.bold, str(r.font.color.rgb) if r.font.color and r.font.color.rgb else None)
+                    for p in due.paragraphs for r in p.runs if r.text]
+            assert any(tx == "입력필요" and b and c == "FF0000" for tx, b, c in runs)
+
+
+def test_row_repeats_preserves_gridspan(tmp_path):
+    from render_docx_template import render_template
+    tpl = tmp_path / "form.docx"
+    tokenized = tmp_path / "form_tokenized.docx"
+    final = tmp_path / "final.docx"
+    _make_action_table_form(tpl, merge_task=True)  # task가 c0~c1 병합
+    apply_mapping(str(tpl), {"table": 0, "row_repeats": [
+        {"row": 1, "field": "action_items", "cols": {"task": 0, "due": 2}},
+    ]}, str(tokenized))
+    render_template(str(tokenized), _sample(), str(final))
+    t = Document(str(final)).tables[0]
+    assert len(t.rows) == 3  # 헤더 + 2행 (병합 있어도 정상 반복)
+    # 각 데이터행에서 병합으로 인해 distinct 셀은 2개(task 병합 + 기한)
+    for i in (1, 2):
+        distinct = {id(c._tc) for c in t.rows[i].cells}
+        assert len(distinct) == 2
+
+
+def test_row_repeats_unknown_field_raises(tmp_path):
+    tpl = tmp_path / "form.docx"
+    _make_action_table_form(tpl)
+    with pytest.raises(ValueError, match="row_repeats"):
+        apply_mapping(str(tpl), {"table": 0, "row_repeats": [
+            {"row": 1, "field": "bogus", "cols": {"task": 0}},
+        ]}, str(tmp_path / "out.docx"))
+
+
 # --- 삽입 테스트 -------------------------------------------------------------
 def test_inline_appends_after_label(tmp_path):
     tpl = tmp_path / "form.docx"
@@ -76,8 +230,8 @@ def test_inline_appends_after_label(tmp_path):
         {"row": 1, "col": 0, "mode": "inline", "fields": ["title"]},
     ]}, str(out))
     text = _cell_texts(out, row=1, col=0)[0]
-    assert "제 목 :" in text          # 라벨 보존
-    assert "{{ title }}" in text      # 토큰이 라벨 뒤에
+    assert "제 목 :" in text            # 라벨 보존
+    assert "{{r title_rt }}" in text    # RichText 토큰이 라벨 뒤에
 
 
 def test_block_single_fills_cell(tmp_path):
@@ -100,8 +254,8 @@ def test_block_multi_keeps_order_and_labels(tmp_path):
         {"row": 3, "col": 0, "mode": "block", "fields": ["purpose", "next_meeting"]},
     ]}, str(out))
     lines = _cell_texts(out, row=3, col=0)
-    assert lines[0] == "[회의 목적] {{ purpose }}"
-    assert lines[1] == "[다음 회의] {{ next_meeting }}"
+    assert lines[0] == "[회의 목적] {{r purpose_rt }}"
+    assert lines[1] == "[다음 회의] {{r next_meeting_rt }}"
 
 
 def test_block_preserves_labeled_cell(tmp_path):
@@ -190,8 +344,8 @@ def test_paragraph_inline_appends_after_label(tmp_path):
         {"para": 2, "mode": "inline", "fields": ["date"]},
     ]}, str(out))
     texts = _para_texts(out)
-    assert "ㅇ (목적) {{ purpose }}" in texts
-    assert "ㅇ (일시) {{ date }}" in texts
+    assert "ㅇ (목적) {{r purpose_rt }}" in texts
+    assert "ㅇ (일시) {{r date_rt }}" in texts
 
 
 def test_paragraph_block_inserts_following_paragraphs(tmp_path):
@@ -262,8 +416,8 @@ def test_mixed_table_and_paragraph_fills(tmp_path):
         "paragraphs": [{"para": 0, "mode": "inline", "fields": ["purpose"]}],
     }, str(out))
     doc_out = Document(str(out))
-    assert "회의록 {{ title }}" in doc_out.tables[0].rows[0].cells[0].text
-    assert "ㅇ (목적) {{ purpose }}" in [p.text for p in doc_out.paragraphs]
+    assert "회의록 {{r title_rt }}" in doc_out.tables[0].rows[0].cells[0].text
+    assert "ㅇ (목적) {{r purpose_rt }}" in [p.text for p in doc_out.paragraphs]
 
 
 def test_paragraph_block_end_to_end(tmp_path):
