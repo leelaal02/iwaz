@@ -26,7 +26,7 @@
 
 ## File Structure
 
-- `requirements-stt.txt` — STT 선택 의존성 (faster-whisper, groq).
+- `requirements-stt.txt` — STT 선택 필요 패키지 (faster-whisper, groq).
 - `scripts/adapters/__init__.py` — `REGISTRY`, `get_adapter()`, `available_sources()`.
 - `scripts/adapters/text.py` — 텍스트 어댑터 (기존 `normalize_input` 위임).
 - `scripts/adapters/whisper_local.py` — 로컬 STT 어댑터 (faster-whisper).
@@ -40,7 +40,7 @@
 
 ## Task 1: 어댑터 패키지 골격 + text 어댑터 + 디스패처
 
-플러그인 레지스트리와 CLI 디스패처를 세우고, 무의존성 text 어댑터로 [1] 단계를 엔드투엔드 동작시킨다. STT 어댑터는 이후 태스크에서 이 골격에 등록만 하면 된다.
+플러그인 레지스트리와 CLI 디스패처를 세우고, 외부 패키지가 필요 없는 text 어댑터로 [1] 단계를 엔드투엔드 동작시킨다. STT 어댑터는 이후 태스크에서 이 골격에 등록만 하면 된다.
 
 **Files:**
 - Create: `requirements-stt.txt`
@@ -56,7 +56,7 @@
   - `adapters/__init__.py`: `REGISTRY: dict[str, Callable]`, `get_adapter(name: str) -> Callable` (미등록 시 `KeyError` 대신 `ValueError`로 사용 가능한 목록 안내), `available_sources() -> list[str]`.
   - `transcribe.py`: `run(source_name: str, source: str, **opts) -> str`, `main() -> None` (CLI: `--source`, positional `input`).
 
-- [ ] **Step 1: STT 선택 의존성 파일 작성**
+- [ ] **Step 1: STT 선택 필요 패키지 파일 작성**
 
 `requirements-stt.txt`:
 ```

@@ -14,7 +14,7 @@ def test_title_and_sections_present():
     md = render_markdown(_sample())
     assert md.startswith("# 2026 3분기 제품 로드맵 회의")
     for heading in ["## 참석자", "## 회의 목적", "## 논의 내용", "## 결정 사항",
-                    "## Action Items", "## 다음 회의 일정", "## 기타·특이사항"]:
+                    "## 실행 항목 Action Items", "## 다음 회의 일정", "## 기타·특이사항"]:
         assert heading in md
 
 

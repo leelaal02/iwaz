@@ -20,7 +20,7 @@
 | 실행 주체 | 사용자는 `/meeting-minutes` 호출, **Claude가 SKILL.md 지시로 헬퍼 실행** | Harness 패턴. 사용자가 직접 `python`을 치지 않음 |
 | 화자 분리 | **미지원 (순수 통문장 텍스트)** | 두 STT 모두 Whisper 기반이라 diarization 없음. 필요 시 별도 확장 |
 | 어댑터 선택 | **명시적 소스 지정** `--source text\|whisper\|groq` | 추가·삭제가 한 줄, 어느 STT를 쓸지 명확 |
-| 의존성 | `requirements-stt.txt`로 **선택적 분리** | 텍스트만 쓰는 사용자는 무거운 STT 패키지 불필요 |
+| 필요 패키지 | `requirements-stt.txt`로 **선택적 분리** | 텍스트만 쓰는 사용자는 무거운 STT 패키지 불필요 |
 | 어댑터 로딩 | **lazy import** | 미설치 상태에서도 텍스트 파이프라인 정상 동작 |
 
 ## 3. 아키텍처

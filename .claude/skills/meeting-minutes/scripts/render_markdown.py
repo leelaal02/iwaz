@@ -38,7 +38,7 @@ def render_markdown(data: dict) -> str:
         lines.append("- (없음)")
     lines.append("")
 
-    lines.append("## Action Items")
+    lines.append("## 실행 항목 Action Items")
     if data["action_items"]:
         lines.append("| 할 일 | 담당자 | 기한 |")
         lines.append("| --- | --- | --- |")

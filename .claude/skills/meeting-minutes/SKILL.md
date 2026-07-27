@@ -1,6 +1,6 @@
 ---
 name: meeting-minutes
-description: Use when the user provides meeting notes, a transcript, or STT output and wants structured meeting minutes exported to Markdown and Word (.docx). Extracts 회의 주제/참석자/논의 내용/결정 사항/Action Items/다음 회의 일정.
+description: Use when the user provides meeting notes, a transcript, or STT output and wants structured meeting minutes exported to Markdown and Word (.docx). Extracts 회의 주제/참석자/논의 내용/결정 사항/실행 항목 Action Items/다음 회의 일정.
 ---
 
 # 회의록 자동 생성 Skill
@@ -18,7 +18,7 @@ description: Use when the user provides meeting notes, a transcript, or STT outp
 
 ## 사전 준비
 
-의존성 설치(최초 1회): `pip install -r requirements.txt`
+필요 패키지 설치(최초 1회): `pip install -r requirements.txt`
 (오디오 STT를 쓸 때만 추가로: `pip install -r requirements-stt.txt`)
 출력 폴더 준비: `output/` 이 없으면 만든다 (`mkdir output`).
 
@@ -40,6 +40,12 @@ description: Use when the user provides meeting notes, a transcript, or STT outp
 이 표준 출력(정규화된 회의 원문)을 [2] 추출 단계의 입력으로 사용한다.
 STT 라이브러리 미설치나 `GROQ_API_KEY` 미설정 시, 명령이 안내 메시지와 함께
 실패하므로 사용자에게 그대로 전달해 설치/설정을 요청한다.
+
+**입력 파일 위치 자동 탐색**: `<입력>`이 작업 폴더에 없더라도 **파일 이름만** 주면
+공통 위치(작업 폴더 → 바탕화면 → 다운로드 → 문서 → 홈)를 재귀 탐색해 찾는다
+(text/whisper/groq 모두 공통 헬퍼 `resolve_input_path` 사용). 추가 폴더가 필요하면
+`MEETING_INPUT_DIRS`(os.pathsep 구분) 환경변수로 앞쪽에 넣을 수 있다. 못 찾으면
+검색한 위치를 안내하며 실패하므로, 정확한 경로를 받거나 폴더를 추가한다.
 
 ### [2] 추출 (이 단계는 네가 직접 수행)
 회의 원문을 읽고 `schema/minutes.schema.json`을 **정확히** 따르는

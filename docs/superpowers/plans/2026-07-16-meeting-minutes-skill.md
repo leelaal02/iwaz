@@ -22,7 +22,7 @@
 
 ## File Structure
 
-- `requirements.txt` — 의존성.
+- `requirements.txt` — 필요 패키지.
 - `schema/minutes.schema.json` — 중간 계약(JSON Schema draft-07).
 - `scripts/validate.py` — 스키마 검증 및 로드.
 - `scripts/normalize_input.py` — [1] 입력 정규화 + STT 어댑터 자리.
@@ -52,7 +52,7 @@
   - `scripts/validate.py`: `validate_minutes(data: dict) -> None` (위반 시 `jsonschema.ValidationError`), `load_minutes(json_path: str) -> dict` (읽고 검증 후 dict 반환).
   - `examples/sample_minutes.json`: 이후 모든 렌더러 테스트의 공용 픽스처.
 
-- [ ] **Step 1: 의존성 파일 작성**
+- [ ] **Step 1: 필요 패키지 파일 작성**
 
 `requirements.txt`:
 ```
@@ -695,7 +695,7 @@ description: Use when the user provides meeting notes, a transcript, or STT outp
 
 ## 사전 준비
 
-의존성 설치(최초 1회): `pip install -r requirements.txt`
+필요 패키지 설치(최초 1회): `pip install -r requirements.txt`
 
 ## 단계별 절차
 

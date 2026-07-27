@@ -38,7 +38,7 @@ def render_docx(data: dict, out_path: str) -> None:
     else:
         doc.add_paragraph("(없음)")
 
-    doc.add_heading("Action Items", level=1)
+    doc.add_heading("실행 항목 Action Items", level=1)
     if data["action_items"]:
         table = doc.add_table(rows=1, cols=3)
         table.style = "Table Grid"
