@@ -1,7 +1,7 @@
 """[4-공통] docx 저장 직전 후처리.
 
 렌더러(무양식/템플릿)가 최종 저장하기 전에 공통으로 적용하는 마무리 작업.
-현재는 표 행이 페이지 끝에서 자동으로 나뉘도록 보정한다.
+표 행 나눔 허용과, 양식 글꼴을 렌더 결과 런에 입히는 작업을 한다.
 """
 from docx.oxml.ns import qn
 
@@ -16,6 +16,59 @@ def _iter_all_tables(container):
         for row in table.rows:
             for cell in row.cells:
                 yield from _iter_all_tables(cell)
+
+
+_FONT_TAGS = ("w:rFonts", "w:sz", "w:szCs")
+
+
+def _iter_all_paragraphs(container):
+    """문서/셀 안의 모든 문단을 중첩표까지 재귀로 낸다."""
+    for paragraph in container.paragraphs:
+        yield paragraph
+    for table in container.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                yield from _iter_all_paragraphs(cell)
+
+
+def inherit_mark_fonts(doc) -> int:
+    """문단 부호에 적어 둔 양식 글꼴을, 글꼴이 없는 런에 입힌다.
+
+    `apply_form_mapping`이 채운 문단에는 그 자리의 글꼴을 문단 부호(`w:pPr/w:rPr`)에
+    남겨 둔다. 런 자체에도 넣지만, `{{r ... }}` 자리는 **렌더 시점에 docxtpl가 런을
+    새로 만들어** 그 글꼴이 사라진다(굵은 소제목·빨간 "입력필요"). 그래서 저장 직전에
+    표식을 보고 글꼴 없는 런에만 채워 넣는다 — 이미 글꼴이 있는 런은 건드리지 않는다.
+
+    글꼴을 채운 런 수를 반환한다(테스트·로깅용).
+    """
+    import copy
+
+    filled = 0
+    for paragraph in _iter_all_paragraphs(doc):
+        pPr = paragraph._p.find(qn("w:pPr"))
+        mark = pPr.find(qn("w:rPr")) if pPr is not None else None
+        if mark is None:
+            continue
+        wanted = [(tag, mark.find(qn(tag))) for tag in _FONT_TAGS]
+        wanted = [(tag, el) for tag, el in wanted if el is not None]
+        if not wanted:
+            continue
+        for run in paragraph.runs:
+            rPr = run._r.get_or_add_rPr()
+            changed = False
+            for tag, element in wanted:
+                if rPr.find(qn(tag)) is not None:
+                    continue  # 런에 이미 지정된 글꼴이 우선
+                if tag == "w:rFonts":
+                    target = rPr.get_or_add_rFonts()
+                    for name, value in element.attrib.items():
+                        target.set(name, value)
+                else:
+                    rPr.append(copy.deepcopy(element))
+                changed = True
+            if changed:
+                filled += 1
+    return filled
 
 
 def allow_rows_to_break(doc) -> int:

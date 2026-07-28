@@ -320,7 +320,316 @@ def test_white_value_cell_still_allowed(tmp_path):
         {"row": 1, "col": 0, "mode": "block", "fields": ["purpose"]},
     ]}
     apply_mapping(str(form), mapping, str(out))
-    assert "{{r purpose_rt }}" in _cell_texts(out, row=1, col=0)[0]
+    # 라벨 없는 빈 칸이라 제목("[회의 목적]")이 자동으로 앞에 붙는다.
+    assert _cell_texts(out, row=1, col=0) == ["[회의 목적]", "{{r purpose_rt }}"]
+
+
+def test_bullet_only_slot_gets_auto_title(tmp_path):
+    """"ㅇ"처럼 글머리만 있는 자리에는 제목이 자동으로 붙는다 — 없으면 정체불명."""
+    doc = Document()
+    doc.add_paragraph("ㅇ")
+    form = tmp_path / "bullet.docx"
+    doc.save(str(form))
+    out = tmp_path / "out.docx"
+    mapping = {"paragraphs": [{"para": 0, "mode": "block", "fields": ["decisions"]}]}
+    apply_mapping(str(form), mapping, str(out))
+    assert Document(str(out)).paragraphs[0].text == "ㅇ [결정 사항]"
+
+
+def test_labeled_slot_gets_no_auto_title(tmp_path):
+    """양식에 이미 라벨이 있으면 제목을 덧붙이지 않는다(중복 방지)."""
+    doc = Document()
+    doc.add_paragraph("결정 사항:")
+    form = tmp_path / "labeled.docx"
+    doc.save(str(form))
+    out = tmp_path / "out.docx"
+    mapping = {"paragraphs": [{"para": 0, "mode": "block", "fields": ["decisions"]}]}
+    apply_mapping(str(form), mapping, str(out))
+    assert Document(str(out)).paragraphs[0].text == "결정 사항:"
+
+
+def test_numbered_bullet_slot_is_not_a_label(tmp_path):
+    """"1." 같은 번호만 있는 자리도 라벨이 아니다 — 제목이 붙는다."""
+    doc = Document()
+    doc.add_paragraph("1.")
+    form = tmp_path / "numbered_label.docx"
+    doc.save(str(form))
+    out = tmp_path / "out.docx"
+    mapping = {"paragraphs": [{"para": 0, "mode": "block", "fields": ["notes"]}]}
+    apply_mapping(str(form), mapping, str(out))
+    assert Document(str(out)).paragraphs[0].text == "1. [기타·특이사항]"
+
+
+def test_multi_field_block_has_no_duplicate_title(tmp_path):
+    """field가 둘 이상이면 block_lines가 이미 라벨을 붙이므로 자동 제목은 생략."""
+    doc = Document()
+    doc.add_paragraph("ㅇ")
+    form = tmp_path / "multi.docx"
+    doc.save(str(form))
+    out = tmp_path / "out.docx"
+    mapping = {"paragraphs": [
+        {"para": 0, "mode": "block", "fields": ["decisions", "notes"]},
+    ]}
+    apply_mapping(str(form), mapping, str(out))
+    result = Document(str(out))
+    assert result.paragraphs[0].text == "ㅇ"
+    texts = [p.text for p in result.paragraphs]
+    assert texts.count("[결정 사항]") == 1
+
+
+def test_item_marker_avoids_template_marker(tmp_path):
+    """양식이 "-"를 쓰면 하위 항목 기호를 "·"로 바꾼다 — 같은 계층 기호 중복 방지."""
+    doc = Document()
+    doc.add_paragraph("-")
+    form = tmp_path / "dash.docx"
+    doc.save(str(form))
+    out = tmp_path / "out.docx"
+    mapping = {"paragraphs": [{"para": 0, "mode": "block", "fields": ["decisions"]}]}
+    apply_mapping(str(form), mapping, str(out))
+    texts = [p.text for p in Document(str(out)).paragraphs]
+    assert any(t.strip().startswith("· {{") for t in texts)
+    assert not any(t.strip().startswith("- {{") for t in texts)
+
+
+def test_topic_marker_switches_when_template_numbers(tmp_path):
+    """양식이 번호를 쓰고 그 번호가 남는 자리면 주제는 넘버링 대신 기호를 쓴다."""
+    doc = Document()
+    doc.add_paragraph("1. 회의 내용")  # 라벨 + 번호가 그대로 남는 자리
+    form = tmp_path / "num.docx"
+    doc.save(str(form))
+    out = tmp_path / "out.docx"
+    mapping = {"paragraphs": [{"para": 0, "mode": "block", "fields": ["discussion"]}]}
+    apply_mapping(str(form), mapping, str(out))
+    texts = [p.text.strip() for p in Document(str(out)).paragraphs]
+    assert "□ {{r d.topic_plain_rt }}" in texts   # 기호 + 번호 없는 주제
+    assert "{{r d.topic_rt }}" not in texts       # 넘버링 토큰은 안 씀
+
+
+def test_marker_ladder_falls_back_when_exhausted(tmp_path):
+    """양식이 사다리를 다 쓰면 마지막 기호로 떨어진다(들여쓰기로 계층 유지)."""
+    from apply_form_mapping import _ITEM_LADDER, _choose_markers
+
+    assert _choose_markers(set(_ITEM_LADDER) | {"num"})["item"] == _ITEM_LADDER[-1]
+
+
+def test_nested_slot_indents_one_more_step(tmp_path):
+    """양식이 이미 한 계층("ㅇ")을 쓰면 우리 내용은 그 아래로 한 단 더 들어간다."""
+    from docx.shared import Cm
+
+    plain = Document()
+    plain.add_paragraph("")
+    plain_form = tmp_path / "plain.docx"
+    plain.save(str(plain_form))
+    bulleted = Document()
+    bulleted.add_paragraph("ㅇ")
+    bullet_form = tmp_path / "bullet.docx"
+    bulleted.save(str(bullet_form))
+
+    mapping = {"paragraphs": [{"para": 0, "mode": "block", "fields": ["decisions"]}]}
+    indents = []
+    for src, name in ((plain_form, "a.docx"), (bullet_form, "b.docx")):
+        out = tmp_path / name
+        apply_mapping(str(src), mapping, str(out))
+        item = [p for p in Document(str(out)).paragraphs
+                if p.text.strip().startswith(("-", "·"))][0]
+        indents.append(item.paragraph_format.left_indent)
+    assert abs((indents[1] - indents[0]) - Cm(0.4)) < Cm(0.01)
+
+
+def test_block_lines_get_hanging_indent(tmp_path):
+    """하위 항목("- …")은 들여쓰기 + 내어쓰기 — 줄바꿈돼도 글머리에 정렬된다."""
+    from docx.shared import Cm
+
+    form = tmp_path / "form.docx"
+    _make_form(form)
+    out = tmp_path / "out.docx"
+    mapping = {"table": 0, "fills": [
+        {"row": 3, "col": 0, "mode": "block", "fields": ["decisions"]},
+    ]}
+    apply_mapping(str(form), mapping, str(out))
+    cell = Document(str(out)).tables[0].rows[3].cells[0]
+    item = [p for p in cell.paragraphs if p.text.strip().startswith("-")][0]
+    # docx는 들여쓰기를 twip으로 저장해 EMU 왕복 시 오차가 생긴다 → 근사 비교.
+    assert abs(item.paragraph_format.left_indent - Cm(1.1)) < Cm(0.01)
+    assert abs(item.paragraph_format.first_line_indent - Cm(-0.35)) < Cm(0.01)
+
+
+def test_section_label_is_bold_with_wide_space(tmp_path):
+    """섹션 제목은 굵게 + 넓은 위 여백 — 하위 계층과 구분된다."""
+    from docx.shared import Cm, Pt
+
+    form = tmp_path / "form.docx"
+    _make_form(form)
+    out = tmp_path / "out.docx"
+    mapping = {"table": 0, "fills": [
+        {"row": 3, "col": 0, "mode": "block", "fields": ["decisions", "notes"]},
+    ]}
+    apply_mapping(str(form), mapping, str(out))
+    cell = Document(str(out)).tables[0].rows[3].cells[0]
+    label = [p for p in cell.paragraphs if p.text.strip().startswith("[")][0]
+    assert label.paragraph_format.space_before == Pt(10)
+    assert label.paragraph_format.left_indent == Cm(0)
+    assert all(r.bold for r in label.runs)
+
+
+def test_three_levels_have_distinct_indent(tmp_path):
+    """섹션 제목 / 소제목 / 하위 항목이 서로 다른 들여쓰기를 갖는다.
+
+    계층마다 기호(`[…]` / `1.` / `-`)가 다르고 들여쓰기도 벌어져야 읽힌다.
+    """
+    form = tmp_path / "form.docx"
+    _make_form(form)
+    out = tmp_path / "out.docx"
+    mapping = {"table": 0, "fills": [
+        {"row": 3, "col": 0, "mode": "block", "fields": ["discussion", "notes"]},
+    ]}
+    apply_mapping(str(form), mapping, str(out))
+    cell = Document(str(out)).tables[0].rows[3].cells[0]
+    by_mark = {}
+    for p in cell.paragraphs:
+        text = p.text.strip()
+        if text.startswith("["):
+            by_mark.setdefault("section", p.paragraph_format.left_indent)
+        elif text.startswith("{{r d.topic_rt"):
+            by_mark.setdefault("topic", p.paragraph_format.left_indent)
+        elif text.startswith("-"):
+            by_mark.setdefault("item", p.paragraph_format.left_indent)
+    assert by_mark["section"] < by_mark["topic"] < by_mark["item"]
+
+
+def test_inserted_paragraph_inherits_format_without_numbering(tmp_path):
+    """삽입 문단은 원본 서식을 물려받되 번호(numPr)는 물려받지 않는다.
+
+    numPr까지 복사하면 목록 각 줄에 "1. 2. 3."이 덧붙는다.
+    """
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml.ns import qn
+
+    doc = Document()
+    target = doc.add_paragraph("")
+    target.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    pPr = target._p.get_or_add_pPr()
+    numPr = pPr.makeelement(qn("w:numPr"), {})
+    numId = pPr.makeelement(qn("w:numId"), {})
+    numId.set(qn("w:val"), "1")
+    numPr.append(numId)
+    pPr.append(numPr)
+    form = tmp_path / "para.docx"
+    doc.save(str(form))
+
+    out = tmp_path / "out.docx"
+    mapping = {"paragraphs": [{"para": 0, "mode": "block", "fields": ["decisions"]}]}
+    apply_mapping(str(form), mapping, str(out))
+
+    result = Document(str(out))
+    items = [p for p in result.paragraphs if p.text.strip().startswith("-")]
+    assert items, "블록이 삽입되지 않았다"
+    for p in items:
+        assert p.alignment == WD_ALIGN_PARAGRAPH.CENTER  # 서식은 상속
+        assert p._p.find(qn("w:pPr")).find(qn("w:numPr")) is None  # 번호는 제외
+
+
+def test_placeholder_text_is_replaced(tmp_path):
+    """양식의 예시 문구("내용을 작성하세요.")는 지우고 값을 넣는다."""
+    doc = Document()
+    table = doc.add_table(rows=1, cols=2)
+    table.cell(0, 0).text = "특이사항"
+    cell = table.cell(0, 1)
+    cell.text = "내용을 작성하세요."
+    cell.add_paragraph("본문 글자크기는 8.5pt를 권장합니다.")
+    form = tmp_path / "ph.docx"
+    doc.save(str(form))
+    out = tmp_path / "out.docx"
+    mapping = {"table": 0, "fills": [
+        {"row": 0, "col": 1, "mode": "block", "fields": ["notes"]},
+    ]}
+    apply_mapping(str(form), mapping, str(out))
+    text = Document(str(out)).tables[0].cell(0, 1).text
+    assert "작성하세요" not in text and "권장합니다" not in text
+    assert "{%p for n in notes %}" in text
+
+
+def test_filler_placeholder_is_replaced(tmp_path):
+    """"2025년 00월 00일"·"OO팀 OOO" 같은 빈칸 표기도 예시로 본다."""
+    doc = Document()
+    table = doc.add_table(rows=1, cols=2)
+    table.cell(0, 0).text = "회의일시"
+    table.cell(0, 1).text = "2025년 00월 00일"
+    form = tmp_path / "filler.docx"
+    doc.save(str(form))
+    out = tmp_path / "out.docx"
+    mapping = {"table": 0, "fills": [
+        {"row": 0, "col": 1, "mode": "inline", "fields": ["date"]},
+    ]}
+    apply_mapping(str(form), mapping, str(out))
+    assert Document(str(out)).tables[0].cell(0, 1).text.strip() == "{{r date_rt }}"
+
+
+def test_real_label_is_not_treated_as_placeholder(tmp_path):
+    """평범한 라벨("회의일시")은 예시가 아니므로 보존된다."""
+    doc = Document()
+    table = doc.add_table(rows=1, cols=1)
+    table.cell(0, 0).text = "회의일시"
+    form = tmp_path / "label.docx"
+    doc.save(str(form))
+    out = tmp_path / "out.docx"
+    mapping = {"table": 0, "fills": [
+        {"row": 0, "col": 0, "mode": "inline", "fields": ["date"]},
+    ]}
+    apply_mapping(str(form), mapping, str(out))
+    assert Document(str(out)).tables[0].cell(0, 0).text.startswith("회의일시")
+
+
+def test_duplicate_label_hint_is_cleared(tmp_path):
+    """값 칸이 라벨과 같은 글자를 담고 있으면("부서 | 부서") 힌트로 보고 지운다."""
+    doc = Document()
+    table = doc.add_table(rows=1, cols=2)
+    table.cell(0, 0).text = "부서"
+    table.cell(0, 1).text = "부서"
+    form = tmp_path / "hint.docx"
+    doc.save(str(form))
+    out = tmp_path / "out.docx"
+    mapping = {"table": 0, "fills": [{"row": 0, "col": 1, "mode": "todo"}]}
+    apply_mapping(str(form), mapping, str(out))
+    assert Document(str(out)).tables[0].cell(0, 1).text.strip() == "{{r todo }}"
+
+
+def test_fills_can_target_different_tables(tmp_path):
+    """표가 여러 개인 양식도 항목별 table 키로 한 번에 채운다."""
+    doc = Document()
+    doc.add_table(rows=1, cols=1)
+    doc.add_table(rows=1, cols=1)
+    form = tmp_path / "two.docx"
+    doc.save(str(form))
+    out = tmp_path / "out.docx"
+    mapping = {"fills": [
+        {"table": 0, "row": 0, "col": 0, "mode": "inline", "fields": ["title"]},
+        {"table": 1, "row": 0, "col": 0, "mode": "inline", "fields": ["date"]},
+    ]}
+    apply_mapping(str(form), mapping, str(out))
+    result = Document(str(out))
+    assert "{{r title_rt }}" in result.tables[0].cell(0, 0).text
+    assert "{{r date_rt }}" in result.tables[1].cell(0, 0).text
+
+
+def test_drop_rows_removes_leftover_example_rows(tmp_path):
+    """양식이 깔아 둔 예시 행은 drop_rows로 지운다(데이터보다 남는 행)."""
+    doc = Document()
+    table = doc.add_table(rows=4, cols=1)
+    for r in range(1, 4):
+        table.cell(r, 0).text = "내용을 작성하세요."
+    form = tmp_path / "rows.docx"
+    doc.save(str(form))
+    out = tmp_path / "out.docx"
+    mapping = {
+        "table": 0,
+        "fills": [{"row": 1, "col": 0, "mode": "block", "fields": ["decisions"]}],
+        "drop_rows": [{"table": 0, "rows": [2, 3]}],
+    }
+    apply_mapping(str(form), mapping, str(out))
+    result = Document(str(out)).tables[0]
+    assert len(result.rows) == 2
+    assert "작성하세요" not in result.cell(1, 0).text
 
 
 def test_out_of_range_row_raises(tmp_path):

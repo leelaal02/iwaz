@@ -41,6 +41,18 @@ def _topic_rt(index: int, topic: str):
     return rt
 
 
+def _topic_plain_rt(topic: str):
+    """번호 없이 주제만 굵게 — 양식이 이미 번호를 써서 기호가 겹칠 때 쓴다.
+
+    이때 계층 기호(□ 등)는 `apply_form_mapping`이 토큰 앞에 평문으로 붙인다.
+    """
+    from docxtpl import RichText
+
+    rt = RichText()
+    rt.add(topic, bold=True)
+    return rt
+
+
 def build_context(data: dict) -> dict:
     """minutes.json(dict) → docxtpl 렌더 컨텍스트.
 
@@ -75,7 +87,11 @@ def build_context(data: dict) -> dict:
         "attendees_rt": _rt(attendees_joined or None),
         # 원본 불변: 새 리스트를 만든다(data mutation 금지).
         "discussion_rt": [
-            {"topic_rt": _topic_rt(i, d["topic"]), "points": d["points"]}
+            {
+                "topic_rt": _topic_rt(i, d["topic"]),
+                "topic_plain_rt": _topic_plain_rt(d["topic"]),
+                "points": d["points"],
+            }
             for i, d in enumerate(data["discussion"], 1)
         ],
         "action_items_rt": [
@@ -117,8 +133,10 @@ def render_template(template_path: str, data: dict, out_path: str) -> None:
             "{{ }}·{% %}·{%tr %}·{%p %} 토큰을 치트시트와 비교해 확인하세요."
         ) from e
     # 양식 표의 행 나눔 금지를 풀어 긴 내용이 페이지를 자연스럽게 넘어가게 한다.
-    from docx_postprocess import allow_rows_to_break
+    from docx_postprocess import allow_rows_to_break, inherit_mark_fonts
     allow_rows_to_break(tpl.docx)
+    # 렌더로 새로 생긴 런(RichText)에 양식 글꼴을 입힌다.
+    inherit_mark_fonts(tpl.docx)
     tpl.save(out_path)
 
 
