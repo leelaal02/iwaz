@@ -48,6 +48,75 @@ def test_build_context_empty_attendees_joined_is_empty():
     assert ctx["attendees"] == []
 
 
+def test_build_context_todo_is_red_bold_richtext():
+    from docxtpl import RichText
+    ctx = build_context(_sample())
+    assert isinstance(ctx["todo"], RichText)
+    xml = ctx["todo"].xml
+    assert "입력필요" in xml
+    assert "FF0000" in xml
+    assert "<w:b/>" in xml
+
+
+def test_build_context_scalar_rt_present_is_plain_value():
+    from docxtpl import RichText
+    ctx = build_context(_sample())
+    assert isinstance(ctx["date_rt"], RichText)
+    assert "2026-07-16 14:00" in ctx["date_rt"].xml
+    assert "FF0000" not in ctx["date_rt"].xml   # 값 있으면 빨강 아님
+
+
+def test_build_context_scalar_rt_empty_is_todo():
+    data = _sample()
+    data["date"] = None
+    data["purpose"] = None
+    data["next_meeting"] = None
+    ctx = build_context(data)
+    for key in ("date_rt", "purpose_rt", "next_meeting_rt"):
+        assert "입력필요" in ctx[key].xml
+        assert "FF0000" in ctx[key].xml
+
+
+def test_build_context_attendees_rt_empty_is_todo():
+    data = _sample()
+    data["attendees"] = []
+    ctx = build_context(data)
+    assert "입력필요" in ctx["attendees_rt"].xml
+    assert "FF0000" in ctx["attendees_rt"].xml
+
+
+def test_build_context_discussion_rt_numbered_bold_and_original_unchanged():
+    data = _sample()
+    ctx = build_context(data)
+    d0 = ctx["discussion_rt"][0]
+    assert "1. STT 연동 우선순위" in d0["topic_rt"].xml
+    assert "<w:b/>" in d0["topic_rt"].xml
+    assert ctx["discussion_rt"][1]["topic_rt"].xml.count("2. 출력 포맷") == 1
+    assert d0["points"] == ["실시간 STT는 3분기 범위에서 제외", "배치 STT부터 도입하기로 의견 수렴"]
+    # 원본 data는 변형되지 않는다(topic_rt 주입 금지)
+    assert "topic_rt" not in data["discussion"][0]
+
+
+def test_build_context_action_items_rt_owner_due():
+    ctx = build_context(_sample())
+    items = {a_rt["task"]: a_rt for a_rt in ctx["action_items_rt"]}
+    # due=null 인 항목 → due_rt는 todo(빨강), owner는 값
+    it = items["샘플 회의 원문 수집"]
+    assert "박서연" in it["owner_rt"].xml
+    assert "FF0000" not in it["owner_rt"].xml
+    assert "입력필요" in it["due_rt"].xml
+    assert "FF0000" in it["due_rt"].xml
+
+
+def test_build_context_keeps_plain_keys_backcompat():
+    """평문 키(사용자 {{ }} 경로)는 그대로 유지된다."""
+    ctx = build_context(_sample())
+    assert ctx["title"] == "2026 3분기 제품 로드맵 회의"
+    assert ctx["date"] == "2026-07-16 14:00"
+    assert ctx["attendees_joined"] == "김수민, 이정우, 박서연"
+    assert {a["task"] for a in ctx["action_items"]} == {"python-docx 렌더러 PoC 작성", "샘플 회의 원문 수집"}
+
+
 def _make_template(path):
     """토큰 + {%tr%} 표(3행 구조)를 담은 최소 템플릿 docx를 만든다."""
     doc = Document()

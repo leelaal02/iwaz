@@ -12,21 +12,25 @@ from pathlib import Path
 
 from normalize_input import resolve_input_path
 
-# --- 토큰 블록 라이브러리 (설계 §4.3) ---------------------------------------
-# 스칼라 field의 값 토큰(inline·block 공통). render_docx_template.build_context 어휘와 일치.
+# --- 토큰 블록 라이브러리 (설계 §4) ------------------------------------------
+# 서식(빨강 "입력필요"·소제목 굵게)이 필요한 값은 RichText 슬롯이라 반드시
+# `{{r ... }}`(r 접두사)로 넣는다. 일반 `{{ }}`에 RichText를 주면 run이 중첩되어
+# 빈칸으로 깨진다(docxtpl 제약). 대응 컨텍스트 키는 render_docx_template.build_context
+# 의 `*_rt`/`discussion_rt`/`action_items_rt`. 항상-존재하는 평문(points·task 등)은
+# 일반 `{{ }}`로 둔다.
 _SCALAR_TOKEN = {
-    "title": "{{ title }}",
-    "date": "{{ date }}",
-    "attendees": "{{ attendees_joined }}",
-    "purpose": "{{ purpose }}",
-    "next_meeting": "{{ next_meeting }}",
+    "title": "{{r title_rt }}",
+    "date": "{{r date_rt }}",
+    "attendees": "{{r attendees_rt }}",
+    "purpose": "{{r purpose_rt }}",
+    "next_meeting": "{{r next_meeting_rt }}",
 }
 
 # 목록형 field의 block 본문(문단 라인 목록). {%p%}는 문단 단위 반복 태그.
 _LIST_BLOCK = {
     "discussion": [
-        "{%p for d in discussion %}",
-        "[{{ d.topic }}]",
+        "{%p for d in discussion_rt %}",
+        "{{r d.topic_rt }}",  # "N. 주제" 넘버링+굵게
         "{%p for p in d.points %}",
         " - {{ p }}",
         "{%p endfor %}",
@@ -38,8 +42,8 @@ _LIST_BLOCK = {
         "{%p endfor %}",
     ],
     "action_items": [
-        "{%p for a in action_items %}",
-        " - {{ a.task }} (담당: {{ a.owner }} / 기한: {{ a.due }})",
+        "{%p for a in action_items_rt %}",
+        " - {{ a.task }} (담당: {{r a.owner_rt }} / 기한: {{r a.due_rt }})",
         "{%p endfor %}",
     ],
     "notes": [
@@ -47,6 +51,20 @@ _LIST_BLOCK = {
         " - {{ n }}",
         "{%p endfor %}",
     ],
+}
+
+# 행 반복 표(row_repeats)용: 리스트형 field → 반복 대상 컨텍스트 키·루프 변수·
+# 하위필드별 컬럼 토큰. task는 항상-존재 평문({{ }}), owner/due는 RichText 슬롯({{r }}).
+_ROW_REPEAT = {
+    "action_items": {
+        "iter": "action_items_rt",
+        "var": "a",
+        "col_tokens": {
+            "task": "{{ a.task }}",
+            "owner": "{{r a.owner_rt }}",
+            "due": "{{r a.due_rt }}",
+        },
+    },
 }
 
 # 한 칸에 여러 field가 들어갈 때 구분용 섹션 라벨(block 복수 field에서만 붙임).
@@ -114,11 +132,18 @@ def _clear_runs(paragraph) -> None:
         run._element.getparent().remove(run._element)
 
 
+_TODO_TOKEN = "{{r todo }}"  # build_context의 RichText `todo`("입력필요" 빨강·굵게)
+
+
+def _append_token(paragraph, token: str) -> None:
+    """paragraph 끝에 임의의 토큰/텍스트를 덧붙인다(라벨 텍스트 보존)."""
+    sep = " " if paragraph.text.strip() else ""  # 라벨이 있으면 한 칸 띄움
+    paragraph.add_run(sep + token)
+
+
 def _append_inline(paragraph, fields) -> None:
     """paragraph 끝에 inline 토큰을 덧붙인다(라벨 텍스트 보존)."""
-    tokens = inline_tokens(fields)
-    sep = " " if paragraph.text.strip() else ""  # 라벨이 있으면 한 칸 띄움
-    paragraph.add_run(sep + tokens)
+    _append_token(paragraph, inline_tokens(fields))
 
 
 def _insert_paragraph_after(paragraph, text: str):
@@ -140,6 +165,16 @@ def _insert_paragraph_after(paragraph, text: str):
 
 def _apply_inline(cell, fields) -> None:
     _append_inline(cell.paragraphs[0], fields)
+
+
+def _apply_todo(cell) -> None:
+    """라벨만 있고 데이터가 없는 칸에 빨간 "입력필요"(RichText) 토큰을 넣는다."""
+    _append_token(cell.paragraphs[0], _TODO_TOKEN)
+
+
+def _apply_literal(cell, text) -> None:
+    """원문에서 찾은 값 등 지정 문자열을 평문으로 넣는다."""
+    _append_token(cell.paragraphs[0], text)
 
 
 def _apply_block(cell, fields) -> None:
@@ -206,7 +241,6 @@ def _apply_table_fills(doc, mapping) -> None:
         r = _require(fill, "row", "fills")
         c = _require(fill, "col", "fills")
         mode = _require(fill, "mode", "fills")
-        fields = _require(fill, "fields", "fills")
         if r < 0 or r >= n_rows:
             raise IndexError(
                 f"행 {r}이(가) 표 범위를 벗어났습니다(표 {ti}의 행은 {n_rows}개)."
@@ -218,11 +252,17 @@ def _apply_table_fills(doc, mapping) -> None:
             )
         cell = row_cells[c]
         if mode == "inline":
-            _apply_inline(cell, fields)
+            _apply_inline(cell, _require(fill, "fields", "fills"))
         elif mode == "block":
-            _apply_block(cell, fields)
+            _apply_block(cell, _require(fill, "fields", "fills"))
+        elif mode == "todo":
+            _apply_todo(cell)
+        elif mode == "literal":
+            _apply_literal(cell, _require(fill, "text", "fills"))
         else:
-            raise ValueError(f"알 수 없는 mode '{mode}' (inline|block 중 하나).")
+            raise ValueError(
+                f"알 수 없는 mode '{mode}' (inline|block|todo|literal 중 하나)."
+            )
 
 
 def _apply_paragraph_fills(doc, mapping) -> None:
@@ -243,19 +283,104 @@ def _apply_paragraph_fills(doc, mapping) -> None:
         targets.append((paras[idx], pf))
     for paragraph, pf in targets:
         mode = _require(pf, "mode", "paragraphs")
-        fields = _require(pf, "fields", "paragraphs")
         if mode == "inline":
-            _append_inline(paragraph, fields)
+            _append_inline(paragraph, _require(pf, "fields", "paragraphs"))
         elif mode == "block":
-            _apply_block_paragraph(paragraph, fields)
+            _apply_block_paragraph(paragraph, _require(pf, "fields", "paragraphs"))
+        elif mode == "todo":
+            _append_token(paragraph, _TODO_TOKEN)
+        elif mode == "literal":
+            _append_token(paragraph, _require(pf, "text", "paragraphs"))
         else:
-            raise ValueError(f"알 수 없는 mode '{mode}' (inline|block 중 하나).")
+            raise ValueError(
+                f"알 수 없는 mode '{mode}' (inline|block|todo|literal 중 하나)."
+            )
+
+
+def _make_tag_row(data_tr, tag: str):
+    """데이터 행 XML을 복제해 모든 셀을 비우고 첫 셀에 `{%tr ...%}` 태그만 넣는다.
+
+    셀 수·gridSpan을 데이터 행과 동일하게 유지해야 표가 깨지지 않으므로 deepcopy를 쓴다.
+    """
+    import copy
+
+    from docx.oxml.ns import qn
+
+    new = copy.deepcopy(data_tr)
+    for tc in new.findall(qn("w:tc")):
+        for p in tc.findall(qn("w:p")):
+            for r in p.findall(qn("w:r")):
+                p.remove(r)
+    first_p = new.findall(qn("w:tc"))[0].find(qn("w:p"))
+    run = first_p.makeelement(qn("w:r"), {})
+    wt = first_p.makeelement(qn("w:t"), {})
+    wt.text = tag
+    run.append(wt)
+    first_p.append(run)
+    return new
+
+
+def _set_cell_token(cell, token: str) -> None:
+    """표 셀의 첫 문단을 비우고 토큰 하나만 넣는다(데이터 행 컬럼 채움용)."""
+    p = cell.paragraphs[0]
+    _clear_runs(p)
+    p.add_run(token)
+
+
+def _apply_row_repeats(doc, mapping) -> None:
+    """`row_repeats`: 리스트형 field를 `{%tr%}` 3행 구조로 표에 펼친다(컬럼별 채움).
+
+    데이터 행의 지정 컬럼에 하위필드 토큰을 넣고, 그 앞/뒤에 for·endfor 태그 행을
+    삽입한다. 렌더 시 docxtpl가 데이터 행을 항목 수만큼 반복하고 태그 행은 삭제한다.
+    """
+    repeats = mapping.get("row_repeats", [])
+    if not repeats:
+        return
+    default_ti = mapping.get("table", 0)
+    for entry in repeats:
+        field = _require(entry, "field", "row_repeats")
+        if field not in _ROW_REPEAT:
+            raise ValueError(
+                f"row_repeats의 field '{field}'는 행 반복 대상이 아닙니다. "
+                "허용: " + ", ".join(sorted(_ROW_REPEAT))
+            )
+        spec = _ROW_REPEAT[field]
+        ti = entry.get("table", default_ti)
+        if ti < 0 or ti >= len(doc.tables):
+            raise IndexError(
+                f"표 인덱스 {ti}가 범위를 벗어났습니다(문서의 표는 {len(doc.tables)}개)."
+            )
+        table = doc.tables[ti]
+        row = _require(entry, "row", "row_repeats")
+        if row < 0 or row >= len(table.rows):
+            raise IndexError(
+                f"행 {row}이(가) 표 범위를 벗어났습니다(표 {ti}의 행은 {len(table.rows)}개)."
+            )
+        cols = _require(entry, "cols", "row_repeats")
+        data_row = table.rows[row]
+        row_cells = data_row.cells
+        for subfield, col_idx in cols.items():
+            if subfield not in spec["col_tokens"]:
+                raise ValueError(
+                    f"row_repeats field '{field}'에 없는 하위필드 '{subfield}'. "
+                    "허용: " + ", ".join(sorted(spec["col_tokens"]))
+                )
+            if col_idx < 0 or col_idx >= len(row_cells):
+                raise IndexError(
+                    f"열 {col_idx}이(가) 표 범위를 벗어났습니다(행 {row}의 열은 {len(row_cells)}개)."
+                )
+            _set_cell_token(row_cells[col_idx], spec["col_tokens"][subfield])
+        data_tr = data_row._tr
+        for_tag = f"{{%tr for {spec['var']} in {spec['iter']} %}}"
+        data_tr.addprevious(_make_tag_row(data_tr, for_tag))
+        data_tr.addnext(_make_tag_row(data_tr, "{%tr endfor %}"))
 
 
 def apply_mapping(template_path: str, mapping: dict, out_path: str) -> None:
     """mapping대로 양식 복사본에 토큰을 삽입해 out_path에 저장한다.
 
-    `fills`(표 셀)와 `paragraphs`(본문 문단) 둘 다, 또는 한쪽만 있어도 된다.
+    `fills`(표 셀)·`paragraphs`(본문 문단)·`row_repeats`(행 반복 표) 중
+    있는 것만 적용한다.
     """
     from docx import Document
 
@@ -263,6 +388,7 @@ def apply_mapping(template_path: str, mapping: dict, out_path: str) -> None:
     doc = Document(str(resolved))
     _apply_table_fills(doc, mapping)
     _apply_paragraph_fills(doc, mapping)
+    _apply_row_repeats(doc, mapping)
     doc.save(out_path)
 
 
