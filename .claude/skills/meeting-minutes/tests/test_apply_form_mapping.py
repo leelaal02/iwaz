@@ -28,6 +28,21 @@ def _cell_texts(out_path, table=0, row=0, col=0):
     return [p.text for p in t.rows[row].cells[col].paragraphs]
 
 
+def _make_shaded_form(path):
+    """회색 라벨 행 + 흰 값 행 구조의 양식(누리미디어 형태)."""
+    from docx.oxml.ns import qn
+
+    doc = Document()
+    table = doc.add_table(rows=2, cols=1)
+    label = table.cell(0, 0)
+    label.text = "회 의 안 건"
+    shd = label._tc.get_or_add_tcPr().makeelement(qn("w:shd"), {})
+    shd.set(qn("w:val"), "clear")
+    shd.set(qn("w:fill"), "F3F3F3")
+    label._tc.get_or_add_tcPr().append(shd)
+    doc.save(str(path))
+
+
 # --- 토큰 블록 라이브러리 단위 테스트 ---------------------------------------
 def test_inline_tokens_join():
     # 자동매핑 스칼라는 RichText 슬롯이므로 {{r *_rt }}로 생성한다.
@@ -270,6 +285,42 @@ def test_block_preserves_labeled_cell(tmp_path):
     assert lines[0] == "제 목 :"                       # 라벨 보존(첫 문단 유지)
     assert "{%p for x in decisions %}" in lines        # 블록은 라벨 뒤에
     assert lines.index("{%p for x in decisions %}") > 0
+
+
+def test_shaded_cell_rejected(tmp_path):
+    """색칠된 라벨 칸에 값을 넣으려 하면 실패한다 — 조용한 오배치 차단."""
+    form = tmp_path / "form.docx"
+    _make_shaded_form(form)
+    mapping = {"table": 0, "fills": [
+        {"row": 0, "col": 0, "mode": "block", "fields": ["purpose"]},
+    ]}
+    with pytest.raises(ValueError, match="배경색"):
+        apply_mapping(str(form), mapping, str(tmp_path / "out.docx"))
+
+
+def test_shaded_cell_allowed_with_flag(tmp_path):
+    """allow_shaded로 명시하면 색칠 칸에도 넣을 수 있다(사용자가 요청한 경우만 쓰는 탈출구)."""
+    form = tmp_path / "form.docx"
+    _make_shaded_form(form)
+    out = tmp_path / "out.docx"
+    mapping = {"table": 0, "fills": [
+        {"row": 0, "col": 0, "mode": "inline", "fields": ["title"],
+         "allow_shaded": True},
+    ]}
+    apply_mapping(str(form), mapping, str(out))
+    assert "{{r title_rt }}" in _cell_texts(out, row=0, col=0)[0]
+
+
+def test_white_value_cell_still_allowed(tmp_path):
+    """음영 없는 값 칸은 그대로 통과한다(가드가 정상 매핑을 막지 않는다)."""
+    form = tmp_path / "form.docx"
+    _make_shaded_form(form)
+    out = tmp_path / "out.docx"
+    mapping = {"table": 0, "fills": [
+        {"row": 1, "col": 0, "mode": "block", "fields": ["purpose"]},
+    ]}
+    apply_mapping(str(form), mapping, str(out))
+    assert "{{r purpose_rt }}" in _cell_texts(out, row=1, col=0)[0]
 
 
 def test_out_of_range_row_raises(tmp_path):

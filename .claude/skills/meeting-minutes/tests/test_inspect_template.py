@@ -1,8 +1,36 @@
-"""inspect_template.py 테스트: 좌표·is_empty·병합 원점 dedup·has_tokens."""
+"""inspect_template.py 테스트: 좌표·is_empty·병합 원점 dedup·음영·넘버링·has_tokens."""
 import pytest
 from docx import Document
+from docx.oxml.ns import qn
 
 from inspect_template import inspect_template
+
+
+def _shade(cell, fill="F3F3F3", theme_fill=None):
+    """셀에 배경 음영(w:shd)을 준다 — 양식의 색칠된 라벨 칸 재현.
+
+    `theme_fill`을 주면 테마 색으로 칠한 칸(w:fill 없음)을 재현한다.
+    """
+    shd = cell._tc.get_or_add_tcPr().makeelement(qn("w:shd"), {})
+    shd.set(qn("w:val"), "clear")
+    if theme_fill is not None:
+        shd.set(qn("w:themeFill"), theme_fill)
+    else:
+        shd.set(qn("w:fill"), fill)
+    cell._tc.get_or_add_tcPr().append(shd)
+
+
+def _number(paragraph, num_id=1):
+    """문단에 자동 번호(w:numPr)를 건다 — 빈 "1." "2." 자리 재현."""
+    pPr = paragraph._p.get_or_add_pPr()
+    numPr = pPr.makeelement(qn("w:numPr"), {})
+    ilvl = pPr.makeelement(qn("w:ilvl"), {})
+    ilvl.set(qn("w:val"), "0")
+    numId = pPr.makeelement(qn("w:numId"), {})
+    numId.set(qn("w:val"), str(num_id))
+    numPr.append(ilvl)
+    numPr.append(numId)
+    pPr.append(numPr)
 
 
 def _make_form(path, *, tokens=False):
@@ -121,6 +149,82 @@ def test_no_tables_returns_empty(tmp_path):
     result = inspect_template(str(p))
     assert result["tables"] == []
     assert result["has_tokens"] is False
+
+
+def test_shaded_label_cell_flagged(tmp_path):
+    """회색 라벨 칸은 shaded=True, 흰 값 칸은 False — 값 자리 판별의 핵심 신호."""
+    doc = Document()
+    table = doc.add_table(rows=2, cols=1)
+    table.cell(0, 0).text = "회 의 안 건"
+    _shade(table.cell(0, 0))
+    table.cell(1, 0).text = ""  # 값 자리(흰 칸)
+    p = tmp_path / "shaded.docx"
+    doc.save(str(p))
+    cells = inspect_template(str(p))["tables"][0]["cells"]
+    by_coord = {(c["row"], c["col"]): c for c in cells}
+    assert by_coord[(0, 0)]["shaded"] is True
+    assert by_coord[(1, 0)]["shaded"] is False
+
+
+@pytest.mark.parametrize("fill", ["F3F3F3", "4472C4", "FFFF00", "C6E0B4", "000000"])
+def test_any_fill_color_is_shaded(tmp_path, fill):
+    """라벨 칸이 회색이 아니어도(파랑·노랑·연두·검정) 음영으로 잡는다."""
+    doc = Document()
+    table = doc.add_table(rows=1, cols=1)
+    _shade(table.cell(0, 0), fill=fill)
+    p = tmp_path / f"fill_{fill}.docx"
+    doc.save(str(p))
+    assert inspect_template(str(p))["tables"][0]["cells"][0]["shaded"] is True
+
+
+def test_theme_fill_is_shaded(tmp_path):
+    """테마 색으로 칠한 칸은 w:fill이 없다 — fill만 보면 놓친다."""
+    doc = Document()
+    table = doc.add_table(rows=1, cols=1)
+    _shade(table.cell(0, 0), theme_fill="accent1")
+    p = tmp_path / "theme.docx"
+    doc.save(str(p))
+    assert inspect_template(str(p))["tables"][0]["cells"][0]["shaded"] is True
+
+
+def test_white_fill_is_not_shaded(tmp_path):
+    """흰색(FFFFFF)·auto 채움은 음영으로 보지 않는다."""
+    doc = Document()
+    table = doc.add_table(rows=1, cols=1)
+    _shade(table.cell(0, 0), fill="FFFFFF")
+    p = tmp_path / "white.docx"
+    doc.save(str(p))
+    assert inspect_template(str(p))["tables"][0]["cells"][0]["shaded"] is False
+
+
+def test_empty_numbered_paragraph_flagged(tmp_path):
+    """글자 없는 번호 문단은 여백이 아니라 값 자리 — numbered=True로 구분한다."""
+    doc = Document()
+    doc.add_paragraph("")          # 간격용 빈 문단
+    numbered = doc.add_paragraph("")  # "1." 만 찍히는 값 자리
+    _number(numbered)
+    p = tmp_path / "numbered.docx"
+    doc.save(str(p))
+    paras = {x["index"]: x for x in inspect_template(str(p))["paragraphs"]}
+    assert paras[0]["is_empty"] is True and paras[0]["numbered"] is False
+    assert paras[1]["is_empty"] is True and paras[1]["numbered"] is True
+
+
+def test_blocks_report_table_paragraph_order(tmp_path):
+    """표와 문단의 본문 순서를 낸다 — 표 밖 문단이 어느 표 뒤인지 알아야 한다."""
+    doc = Document()
+    doc.add_paragraph("회 의 록")
+    doc.add_table(rows=1, cols=1)
+    doc.add_paragraph("")
+    doc.add_table(rows=1, cols=1)
+    p = tmp_path / "order.docx"
+    doc.save(str(p))
+    assert inspect_template(str(p))["blocks"] == [
+        {"type": "paragraph", "index": 0},
+        {"type": "table", "index": 0},
+        {"type": "paragraph", "index": 1},
+        {"type": "table", "index": 1},
+    ]
 
 
 def test_paragraphs_dumped_with_index(tmp_path):

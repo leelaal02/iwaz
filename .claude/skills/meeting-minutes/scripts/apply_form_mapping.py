@@ -10,6 +10,7 @@ import json
 import sys
 from pathlib import Path
 
+from inspect_template import is_shaded
 from normalize_input import resolve_input_path
 
 # --- 토큰 블록 라이브러리 (설계 §4) ------------------------------------------
@@ -215,6 +216,29 @@ def _apply_block_paragraph(paragraph, fields) -> None:
             prev = _insert_paragraph_after(prev, line)
 
 
+def _check_not_shaded(cell, entry: dict, where: str) -> None:
+    """배경색이 칠해진 칸에 값을 넣으려 하면 막는다(색 무관 — 회색뿐 아니라 어떤 색이든).
+
+    색칠된 칸은 거의 항상 라벨/헤더이고, 값은 인접한 색 없는 칸이나 다음 행·문단에
+    들어간다. block/inline은 라벨을 지우지 않고 뒤에 이어 붙이므로 색칠된 칸에
+    매핑해도 오류 없이 통과해 **라벨 칸 안에 본문이 박히는** 결과가 나온다.
+    이 조용한 오배치를 실행 시점에 시끄럽게 만든다.
+
+    매핑 항목에 `"allow_shaded": true`가 있으면 통과시키되, 이 우회는
+    **사용자가 그 칸에 넣으라고 명시적으로 요청했을 때만** 쓴다. 넣을 자리를
+    못 찾았다는 이유로 붙이는 용도가 아니다(그 경우 다른 빈 자리로 옮긴다).
+    """
+    if entry.get("allow_shaded"):
+        return
+    if is_shaded(cell._tc):
+        raise ValueError(
+            f"{where}: 배경색이 칠해진 칸에 값을 넣으려 합니다. 색칠된 칸은 "
+            "라벨/헤더이므로 값은 같은 행의 색 없는 칸이나 바로 다음 빈 행·문단에 "
+            "매핑하세요(구조 JSON의 shaded=false 자리). 정말 이 칸에 넣어야 하면 "
+            '해당 매핑 항목에 "allow_shaded": true를 추가하세요.'
+        )
+
+
 def _require(entry: dict, key: str, where: str):
     """매핑 항목에서 필수 키를 꺼낸다. 없으면 원시 KeyError 대신 안내 메시지."""
     if key not in entry:
@@ -251,6 +275,7 @@ def _apply_table_fills(doc, mapping) -> None:
                 f"열 {c}이(가) 표 범위를 벗어났습니다(행 {r}의 열은 {len(row_cells)}개)."
             )
         cell = row_cells[c]
+        _check_not_shaded(cell, fill, f"fills[{r},{c}]")
         if mode == "inline":
             _apply_inline(cell, _require(fill, "fields", "fills"))
         elif mode == "block":
@@ -369,6 +394,9 @@ def _apply_row_repeats(doc, mapping) -> None:
                 raise IndexError(
                     f"열 {col_idx}이(가) 표 범위를 벗어났습니다(행 {row}의 열은 {len(row_cells)}개)."
                 )
+            _check_not_shaded(
+                row_cells[col_idx], entry, f"row_repeats[{row},{col_idx}]"
+            )
             _set_cell_token(row_cells[col_idx], spec["col_tokens"][subfield])
         data_tr = data_row._tr
         for_tag = f"{{%tr for {spec['var']} in {spec['iter']} %}}"
