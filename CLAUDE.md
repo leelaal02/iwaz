@@ -38,7 +38,7 @@ Harness Engineering을 적용한 **회의록 자동 생성 Skill**. 텍스트 �
 스택: Python 3.9+, python-docx, jsonschema, pytest, faster-whisper·groq(STT 선택). 스킬은 `.claude/skills/meeting-minutes/`에 자기완결로 존재.
 
 - 필요 패키지 설치: `pip install -r .claude/skills/meeting-minutes/requirements.txt` (오디오 STT는 `requirements-stt.txt` 추가)
-- 테스트: `python -m pytest .claude/skills/meeting-minutes/tests -q`
+- 테스트: `python -m pytest -q` (루트 `pytest.ini`의 testpaths가 스킬 테스트를 가리킨다)
 - 파이프라인은 `/meeting-minutes` 호출 시 Claude가 SKILL.md 지시대로 헬퍼를 실행
   (중간 파일은 `output/.work/`에, 최종 docx만 `output/회의록_<제목>_<생성일>.docx`에 — 아래 위치 규칙 참고):
   - [1] `python .claude/skills/meeting-minutes/scripts/transcribe.py --source <text|whisper|groq> <입력> > output/.work/meeting.txt`

@@ -51,7 +51,7 @@ _SECTION_LABEL = {
 }
 
 # 허용되는(Field) 목록을 모아 놓은 상수
-ALLOWED_FIELDS = set(_SECTION_LABEL)  # 고정 9항목 어휘
+ALLOWED_FIELDS = set(_SECTION_LABEL)  # 고정 10항목 어휘
 
 # --- 계층 기호 사다리 --------------------------------------------------------
 # 양식이 이미 쓰는 기호를 우리 내용이 또 쓰면 두 계층이 같은 기호가 돼 구분이

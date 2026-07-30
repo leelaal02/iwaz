@@ -70,8 +70,9 @@ def test_table_form_roundtrip_fills_values(tmp_path):
             {"row": 3, "col": 1, "mode": "block", "fields": ["purpose"]},
             {"row": 4, "col": 1, "mode": "block", "fields": ["discussion"]},
             {"row": 5, "col": 1, "mode": "block", "fields": ["decisions"]},
-            {"row": 6, "col": 1, "mode": "block", "fields": ["action_items"]},
-            {"row": 7, "col": 1, "mode": "block", "fields": ["next_meeting"]},
+            {"row": 6, "col": 1, "mode": "block", "fields": ["open_issues"]},
+            {"row": 7, "col": 1, "mode": "block", "fields": ["action_items"]},
+            {"row": 8, "col": 1, "mode": "block", "fields": ["next_meeting"]},
         ],
     }
     apply_mapping(str(TABLE_FORM), mapping, str(tokenized))
@@ -80,6 +81,7 @@ def test_table_form_roundtrip_fills_values(tmp_path):
     assert "2026 3분기 제품 로드맵 회의" in text          # title
     assert "김수민, 이정우, 박서연" in text                # attendees_joined
     assert "docx 변환은 python-docx로 진행" in text        # decisions 반복
+    assert "실시간 STT 도입 시점 미정" in text             # open_issues 반복
     assert "python-docx 렌더러 PoC 작성" in text           # action_items 반복
 
 
@@ -94,7 +96,7 @@ def test_paragraph_form_roundtrip_fills_values(tmp_path):
             {"para": 4, "mode": "inline", "fields": ["attendees"]},
             {"para": 5, "mode": "inline", "fields": ["purpose"]},
             {"para": 7, "mode": "block", "fields": ["discussion"]},
-            {"para": 9, "mode": "block", "fields": ["decisions", "action_items"]},
+            {"para": 9, "mode": "block", "fields": ["decisions", "open_issues", "action_items"]},
             {"para": 11, "mode": "block", "fields": ["next_meeting", "notes"]},
         ]
     }
@@ -106,6 +108,8 @@ def test_paragraph_form_roundtrip_fills_values(tmp_path):
     assert "python-docx 렌더러 PoC 작성" in text           # action_items block
     # 복수 field block은 섹션 라벨로 구분된다
     assert "[결정 사항]" in text
+    assert "[미결 사항]" in text
     assert "[실행 항목]" in text
+    assert "STT 엔진 로컬 vs 클라우드 선택 보류" in text   # open_issues 반복
     # 양식의 헤딩은 보존된다
     assert "2. 회의 내용" in text

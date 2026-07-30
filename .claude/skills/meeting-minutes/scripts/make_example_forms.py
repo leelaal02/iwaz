@@ -29,7 +29,7 @@ def build_table_form() -> Document:
     """
     doc = Document()
     doc.add_heading("회      의      록", level=0)
-    table = doc.add_table(rows=8, cols=2)
+    table = doc.add_table(rows=9, cols=2)
     table.style = "Table Grid"
     labels = [
         "제  목",   # row 0 → title
@@ -38,8 +38,9 @@ def build_table_form() -> Document:
         "회의 목적",  # row 3 → purpose
         "논의 내용",  # row 4 (아래 빈칸 행에 block)
         "결정 사항",  # row 5
-        "실행 항목",  # row 6
-        "다음 회의",  # row 7 → next_meeting
+        "미결 사항",  # row 6 → open_issues
+        "실행 항목",  # row 7
+        "다음 회의",  # row 8 → next_meeting
     ]
     for r, label in enumerate(labels):
         table.rows[r].cells[0].text = label

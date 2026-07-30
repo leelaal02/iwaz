@@ -12,7 +12,7 @@ OUT = Path(__file__).resolve().parent.parent / "templates" / "example-template.d
 
 
 def build_example() -> Document:
-    """9개 항목 토큰을 모두 담은 예시 템플릿 Document를 만든다."""
+    """10개 항목 토큰을 모두 담은 예시 템플릿 Document를 만든다."""
     doc = Document()
     # 표시자 위치는 자유롭게 편집 가능. 아래는 안내(브레이스/퍼센트 미포함).
     doc.add_paragraph(
@@ -37,6 +37,11 @@ def build_example() -> Document:
 
     doc.add_heading("결정 사항", level=1)
     doc.add_paragraph("{%p for x in decisions %}")
+    doc.add_paragraph("- {{ x }}")
+    doc.add_paragraph("{%p endfor %}")
+
+    doc.add_heading("미결 사항", level=1)
+    doc.add_paragraph("{%p for x in open_issues %}")
     doc.add_paragraph("- {{ x }}")
     doc.add_paragraph("{%p endfor %}")
 
