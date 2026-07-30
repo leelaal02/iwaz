@@ -108,13 +108,37 @@ def _looks_like_path(source: str) -> bool:
     return bool(s) and "\n" not in s and "\r" not in s and len(s) <= 260
 
 
+# 입력 파일로 볼 확장자. 이 확장자로 끝나는 한 줄 입력은 "파일을 주려 한 것"이므로
+# 못 찾으면 조용히 원문으로 삼지 않고 실패해야 한다 — 오타 하나로 파일명 한 줄이
+# 회의 원문이 되어 회의록 전체가 그 한 줄로 만들어지는 사고를 막는다.
+# 붙여넣은 회의 원문이 우연히 이런 확장자로 끝날 일은 없으므로 오탐 위험은 없다.
+_INPUT_SUFFIXES = {
+    ".txt", ".text", ".md", ".log", ".csv", ".json", ".vtt", ".srt",
+    ".rtf", ".docx", ".doc", ".hwp", ".hwpx", ".pdf",
+    ".wav", ".mp3", ".m4a", ".mp4", ".flac", ".ogg", ".aac", ".wma", ".webm",
+}
+
+
+def _looks_like_file(source: str) -> bool:
+    """경로 후보이면서 알려진 입력 확장자로 끝나면 True(= 반드시 존재해야 하는 입력)."""
+    return (
+        _looks_like_path(source)
+        and Path(source.strip()).suffix.lower() in _INPUT_SUFFIXES
+    )
+
+
 def load_meeting_text(source: str) -> str:
     """텍스트 문자열 또는 .txt 파일 경로를 정규화된 회의 원문으로 변환.
 
     - source가 경로 후보이고 (작업 폴더 밖이라도) 파일로 해석되면 파일 내용을 읽음.
-    - 그렇지 않으면 source 자체를 원문 텍스트로 간주.
+    - 파일 확장자(`.txt` 등)로 끝나면 **못 찾을 때 실패**한다 — 파일을 주려 한 입력이
+      조용히 회의 원문으로 둔갑하지 않도록.
+    - 확장자가 없는 문자열은 붙여넣은 원문으로 간주한다.
     """
-    resolved = resolve_input_path(source, must_exist=False) if _looks_like_path(source) else None
+    if _looks_like_file(source):
+        resolved = resolve_input_path(source, must_exist=True)
+    else:
+        resolved = resolve_input_path(source, must_exist=False) if _looks_like_path(source) else None
     if resolved is not None:
         text = resolved.read_text(encoding="utf-8")
     else:

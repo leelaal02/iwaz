@@ -6,10 +6,17 @@
 
 원본 양식은 절대 수정하지 않는다 — 호출자가 준 복사본 경로(out_path)에만 저장.
 """
+import copy
 import json
 import re
 import sys
 from pathlib import Path
+
+from docx import Document
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from docx.shared import Cm, Pt
+from docx.text.paragraph import Paragraph
 
 from inspect_template import is_shaded
 from normalize_input import resolve_input_path
@@ -27,69 +34,7 @@ _SCALAR_TOKEN = {
     "purpose": "{{r purpose_rt }}",
     "next_meeting": "{{r next_meeting_rt }}",
 }
-
-# --- 계층 기호 사다리 --------------------------------------------------------
-# 양식이 이미 쓰는 기호를 우리 내용이 또 쓰면 두 계층이 같은 기호가 돼 구분이
-# 안 된다("1. [논의 내용]" 아래 "1. 주제"). 그래서 기호를 고정하지 않고,
-# **그 자리에서 양식이 쓰는 기호를 비껴** 사다리에서 골라 쓴다.
-_TOPIC_LADDER = ["num", "□", "◇", "▪"]  # "num" = 렌더러의 "N. 주제" 넘버링
-_ITEM_LADDER = ["-", "·", "‣", "◦"]
-# _line_level이 라인만 보고 계층을 판정할 수 있도록 하위 항목 기호를 모아 둔다.
-_ITEM_MARKS = set(_ITEM_LADDER)
-
-_DEFAULT_MARKERS = {"topic": _TOPIC_LADDER[0], "item": _ITEM_LADDER[0]}
-
-
-def _topic_line(marker: str) -> str:
-    """주제 줄 토큰 — 넘버링이면 렌더러가 만든 "N. 주제", 기호면 기호+주제."""
-    if marker == "num":
-        return "{{r d.topic_rt }}"  # "N. 주제" 넘버링+굵게
-    return f"{marker} {{{{r d.topic_plain_rt }}}}"  # 기호 + 주제(굵게, 번호 없음)
-
-
-def _list_block(field: str, markers: dict) -> list:
-    """목록형 field의 block 본문(문단 라인 목록). {%p%}는 문단 단위 반복 태그."""
-    item = markers["item"]
-    blocks = {
-        "discussion": [
-            "{%p for d in discussion_rt %}",
-            _topic_line(markers["topic"]),
-            "{%p for p in d.points %}",
-            f" {item} {{{{ p }}}}",
-            "{%p endfor %}",
-            "{%p endfor %}",
-        ],
-        "decisions": [
-            "{%p for x in decisions %}",
-            f" {item} {{{{ x }}}}",
-            "{%p endfor %}",
-        ],
-        "action_items": [
-            "{%p for a in action_items_rt %}",
-            f" {item} {{{{ a.task }}}} (담당: {{{{r a.owner_rt }}}} / 기한: {{{{r a.due_rt }}}})",
-            "{%p endfor %}",
-        ],
-        "notes": [
-            "{%p for n in notes %}",
-            f" {item} {{{{ n }}}}",
-            "{%p endfor %}",
-        ],
-    }
-    return blocks[field]
-
-# 행 반복 표(row_repeats)용: 리스트형 field → 반복 대상 컨텍스트 키·루프 변수·
-# 하위필드별 컬럼 토큰. task는 항상-존재 평문({{ }}), owner/due는 RichText 슬롯({{r }}).
-_ROW_REPEAT = {
-    "action_items": {
-        "iter": "action_items_rt",
-        "var": "a",
-        "col_tokens": {
-            "task": "{{ a.task }}",
-            "owner": "{{r a.owner_rt }}",
-            "due": "{{r a.due_rt }}",
-        },
-    },
-}
+_TODO_TOKEN = "{{r todo }}"  # build_context의 RichText `todo`("입력필요" 빨강·굵게)
 
 # 한 칸에 여러 field가 들어갈 때 구분용 섹션 라벨(block 복수 field에서만 붙임).
 _SECTION_LABEL = {
@@ -104,15 +49,76 @@ _SECTION_LABEL = {
     "notes": "[기타·특이사항]",
 }
 
+# 허용되는(Field) 목록을 모아 놓은 상수
 ALLOWED_FIELDS = set(_SECTION_LABEL)  # 고정 9항목 어휘
 
+# --- 계층 기호 사다리 --------------------------------------------------------
+# 양식이 이미 쓰는 기호를 우리 내용이 또 쓰면 두 계층이 같은 기호가 돼 구분이
+# 안 된다("1. [논의 내용]" 아래 "1. 주제"). 그래서 기호를 고정하지 않고,
+# **그 자리에서 양식이 쓰는 기호를 비껴** 사다리에서 골라 쓴다.
+_TOPIC_LADDER = ["num", "□", "◇", "▪"]  # "num" = 렌더러의 "N. 주제" 넘버링 # 주제
+_ITEM_LADDER = ["-", "·", "‣", "◦"] # 항목, 내용
+_ITEM_MARKS = set(_ITEM_LADDER)  # _line_level이 라인만 보고 계층을 판정하도록
+_DEFAULT_MARKERS = {"topic": _TOPIC_LADDER[0], "item": _ITEM_LADDER[0]} # 기본 사용 기호: 주제 1.  항목 -
 
+
+# 행 반복 표(row_repeats)용: 리스트형 field → 반복 대상 컨텍스트 키·루프 변수·
+# 하위필드별 컬럼 토큰. task는 항상-존재 평문({{ }}), owner/due는 RichText 슬롯({{r }}).
+_ROW_REPEAT = { # 반복 가능한 표 설정
+    "action_items": {
+        "iter": "action_items_rt", # 템플릿에 전달할 반복 데이터 이름
+        "var": "a", # 반복문에서 사용할 변수 이름
+        "col_tokens": { # 각 열(Column)에 넣을 토큰
+            "task": "{{ a.task }}", # 해야 할 작업(업무 내용)
+            "owner": "{{r a.owner_rt }}", # 담당자
+            "due": "{{r a.due_rt }}",# 완료 예정일(Due Date)
+        },
+    },
+}
+
+
+def _list_block(field: str, markers: dict) -> list:
+    """목록형 field의 block 본문(문단 라인 목록). {%p%}는 문단 단위 반복 태그."""
+    item = markers["item"] # 항목
+    topic = markers["topic"] # 주제
+    # 넘버링: 렌더러가 만든 "N. 주제",  기호: 기호 + 주제(굵게, 번호 없음).
+    topic_line = (
+        "{{r d.topic_rt }}" if topic == "num" else f"{topic} {{{{r d.topic_plain_rt }}}}"
+    )
+    blocks = { # 필드별 출력 블록을 저장한 딕셔너리
+        "discussion": [ # 논의 내용
+            "{%p for d in discussion_rt %}",
+            topic_line,
+            "{%p for p in d.points %}",
+            f" {item} {{{{ p }}}}",
+            "{%p endfor %}",
+            "{%p endfor %}",
+        ],
+        "decisions": [ # 결정 사항
+            "{%p for x in decisions %}",
+            f" {item} {{{{ x }}}}",
+            "{%p endfor %}",
+        ],
+        "action_items": [ # 실행 항목
+            "{%p for a in action_items_rt %}",
+            f" {item} {{{{ a.task }}}} (담당: {{{{r a.owner_rt }}}} / 기한: {{{{r a.due_rt }}}})",
+            "{%p endfor %}",
+        ],
+        "notes": [ # 비고
+            "{%p for n in notes %}",
+            f" {item} {{{{ n }}}}",
+            "{%p endfor %}",
+        ],
+    }
+    return blocks[field]
+
+# fields에 들어있는 필드 이름이 모두 올바른지 검사(검증)하는 함수
 def _validate_fields(fields) -> None:
-    if not fields:
+    if not fields: # if 조건문 : 조건이 참일때만 실행
         raise ValueError("fill의 'fields'가 비어 있습니다.")
-    for f in fields:
+    for f in fields: # for 반복문 : 여러개 요소를 하나씩 반복 처리
         if f not in ALLOWED_FIELDS:
-            raise ValueError(
+            raise ValueError( # raise : 예외발생 오류를 발생시켜 실행 중단
                 f"알 수 없는 field '{f}'. 허용 어휘: "
                 + ", ".join(sorted(ALLOWED_FIELDS))
             )
@@ -152,77 +158,8 @@ def block_lines(fields, markers: dict = None) -> list:
     return lines
 
 
-# --- docx 조작 --------------------------------------------------------------
-def _clear_runs(paragraph) -> None:
-    for run in list(paragraph.runs):
-        run._element.getparent().remove(run._element)
-
-
-_TODO_TOKEN = "{{r todo }}"  # build_context의 RichText `todo`("입력필요" 빨강·굵게)
-
-
-def _append_token(paragraph, token: str) -> None:
-    """paragraph 끝에 임의의 토큰/텍스트를 덧붙인다(라벨 텍스트 보존).
-
-    라벨이 쓰는 글꼴을 그대로 물려받는다 — 안 그러면 "제 목 :"은 양식 글꼴,
-    그 뒤 값만 스타일 기본 글꼴로 렌더돼 한 줄 안에서 글꼴이 갈린다.
-    """
-    font = read_font(paragraph)
-    sep = " " if paragraph.text.strip() else ""  # 라벨이 있으면 한 칸 띄움
-    run = paragraph.add_run(sep + token)
-    apply_font(run, font)
-    mark_font(paragraph, font)
-
-
-def _append_inline(paragraph, fields) -> None:
-    """paragraph 끝에 inline 토큰을 덧붙인다(라벨 텍스트 보존)."""
-    _append_token(paragraph, inline_tokens(fields))
-
-
-def _copy_paragraph_format(source, target) -> None:
-    """원본 문단의 서식(`w:pPr`)을 복제하되 번호 매김(`w:numPr`)은 뺀다.
-
-    새로 만든 문단은 pPr이 없어 문서 기본 서식(Normal)이 된다 — 양식의 글꼴·
-    정렬·줄간격이 채운 부분에서만 튀는 원인. 반대로 numPr까지 복사하면 삽입한
-    **모든 줄에 번호가 붙으므로** 제외한다(번호 자리에 목록을 넣는 양식 대응).
-    """
-    import copy
-
-    from docx.oxml.ns import qn
-
-    src_pPr = source._p.find(qn("w:pPr"))
-    if src_pPr is None:
-        return
-    new_pPr = copy.deepcopy(src_pPr)
-    for num_pr in new_pPr.findall(qn("w:numPr")):
-        new_pPr.remove(num_pr)
-    old_pPr = target._p.find(qn("w:pPr"))
-    if old_pPr is not None:
-        target._p.remove(old_pPr)
-    target._p.insert(0, new_pPr)
-
-
+# --- 글꼴 읽기·입히기 --------------------------------------------------------
 _FONT_ATTRS = ("ascii", "hAnsi", "eastAsia", "cs")
-
-
-# 양식이 미리 넣어 둔 예시 문구 패턴. 라벨이 아니라 지우고 채워야 할 자리다.
-_ASK_PATTERN = re.compile(r"(작성|입력|기재|기입)\s*(해\s*주)?\s*(하)?세요")
-_FILLER_RUN = re.compile(r"[Oo0○]{2,}")
-
-
-def is_placeholder(text: str) -> bool:
-    """양식의 예시 문구면 True — "내용을 작성하세요.", "OO팀 OOO", "2025년 00월 00일".
-
-    라벨("회의일시")은 자리를 알려주므로 보존해야 하지만, 예시 문구는 **지우고
-    그 자리에 값을 넣어야** 한다. 남겨 두면 회의록에 "내용을 작성하세요."가 그대로
-    인쇄된다. 판정은 두 가지 — 작성 요청 문구, 그리고 O·0을 반복한 빈칸 표기.
-    """
-    stripped = text.strip()
-    if not stripped:
-        return False
-    if _ASK_PATTERN.search(stripped):
-        return True
-    return len(_FILLER_RUN.findall(stripped)) >= 2
 
 
 def read_font(paragraph):
@@ -233,8 +170,6 @@ def read_font(paragraph):
     스타일 기본값으로 렌더되므로, 같은 자리에 글꼴이 섞인다. 그래서 그 자리의
     글꼴을 읽어 우리가 채우는 런에 그대로 입힌다.
     """
-    from docx.oxml.ns import qn
-
     sources = [run._r.find(qn("w:rPr")) for run in paragraph.runs]
     pPr = paragraph._p.find(qn("w:pPr"))
     if pPr is not None:  # 런을 지운 뒤에도 남는 문단 부호 서식(예시 문구 제거 대비)
@@ -258,11 +193,7 @@ def read_font(paragraph):
 
 def _write_font(rPr, font) -> None:
     """`w:rPr`에 글꼴 이름·크기를 쓴다(python-docx API로 순서 안전하게)."""
-    from docx.shared import Pt
-
     if font["names"]:
-        from docx.oxml.ns import qn
-
         rFonts = rPr.get_or_add_rFonts()
         for attr, value in font["names"].items():
             rFonts.set(qn(f"w:{attr}"), value)
@@ -287,9 +218,6 @@ def mark_font(paragraph, font) -> None:
     """
     if not font:
         return
-    from docx.oxml import OxmlElement
-    from docx.oxml.ns import qn
-
     pPr = paragraph._p.get_or_add_pPr()
     rPr = pPr.find(qn("w:rPr"))
     if rPr is None:
@@ -299,6 +227,149 @@ def mark_font(paragraph, font) -> None:
     _write_font(rPr, font)
 
 
+# --- 문단 조작 ---------------------------------------------------------------
+def _clear_runs(paragraph) -> None:
+    for run in list(paragraph.runs):
+        run._element.getparent().remove(run._element)
+
+
+def _append_token(paragraph, token: str) -> None:
+    """paragraph 끝에 임의의 토큰/텍스트를 덧붙인다(라벨 텍스트 보존).
+
+    라벨이 쓰는 글꼴을 그대로 물려받는다 — 안 그러면 "제 목 :"은 양식 글꼴,
+    그 뒤 값만 스타일 기본 글꼴로 렌더돼 한 줄 안에서 글꼴이 갈린다.
+    """
+    font = read_font(paragraph)
+    sep = " " if paragraph.text.strip() else ""  # 라벨이 있으면 한 칸 띄움
+    run = paragraph.add_run(sep + token)
+    apply_font(run, font)
+    mark_font(paragraph, font)
+
+
+def _copy_paragraph_format(source, target) -> None:
+    """원본 문단의 서식(`w:pPr`)을 복제하되 번호 매김(`w:numPr`)은 뺀다.
+
+    새로 만든 문단은 pPr이 없어 문서 기본 서식(Normal)이 된다 — 양식의 글꼴·
+    정렬·줄간격이 채운 부분에서만 튀는 원인. 반대로 numPr까지 복사하면 삽입한
+    **모든 줄에 번호가 붙으므로** 제외한다(번호 자리에 목록을 넣는 양식 대응).
+    """
+    src_pPr = source._p.find(qn("w:pPr"))
+    if src_pPr is None:
+        return
+    new_pPr = copy.deepcopy(src_pPr)
+    for num_pr in new_pPr.findall(qn("w:numPr")):
+        new_pPr.remove(num_pr)
+    old_pPr = target._p.find(qn("w:pPr"))
+    if old_pPr is not None:
+        target._p.remove(old_pPr)
+    target._p.insert(0, new_pPr)
+
+
+def _insert_paragraph_after(paragraph, text: str, style_from=None):
+    """본문에서 paragraph 바로 뒤에 새 문단을 만들어 반환한다.
+
+    python-docx에 공개 API가 없어 XML(addnext)로 삽입한다. 표 셀이 아니라
+    문단 기반 양식의 block 채움에서 여러 문단을 순서대로 끼워 넣을 때 쓴다.
+    `style_from`을 주면 그 문단의 서식을 물려받는다(양식 글꼴 유지).
+    """
+    new_p = OxmlElement("w:p")
+    paragraph._p.addnext(new_p)
+    new_para = Paragraph(new_p, paragraph._parent)
+    if style_from is not None:
+        _copy_paragraph_format(style_from, new_para)
+    if text:
+        new_para.add_run(text)
+    return new_para
+
+
+# --- 자리 판정(라벨·예시 문구·계층 기호) -------------------------------------
+# 글머리 기호만 있는 자리("ㅇ", "-", "1.")는 라벨이 아니라 빈 값 자리다.
+_BULLET_CHARS = "ㅇ○●◦·•*-–—□■◇◆※∙"
+_NUMBER_PREFIX = re.compile(r"^\(?\d+\s*[.)]\s*")
+
+# 양식이 미리 넣어 둔 예시 문구 패턴. 라벨이 아니라 지우고 채워야 할 자리다.
+_ASK_PATTERN = re.compile(r"(작성|입력|기재|기입)\s*(해\s*주)?\s*(하)?세요")
+_FILLER_RUN = re.compile(r"[Oo0○]{2,}")
+
+
+def is_placeholder(text: str) -> bool:
+    """양식의 예시 문구면 True — "내용을 작성하세요.", "OO팀 OOO", "2025년 00월 00일".
+
+    라벨("회의일시")은 자리를 알려주므로 보존해야 하지만, 예시 문구는 **지우고
+    그 자리에 값을 넣어야** 한다. 남겨 두면 회의록에 "내용을 작성하세요."가 그대로
+    인쇄된다. 판정은 두 가지 — 작성 요청 문구, 그리고 O·0을 반복한 빈칸 표기.
+    """
+    stripped = text.strip()
+    if not stripped:
+        return False
+    if _ASK_PATTERN.search(stripped):
+        return True
+    return len(_FILLER_RUN.findall(stripped)) >= 2
+
+
+def _has_meaningful_label(text: str) -> bool:
+    """그 자리에 "무엇을 적는 칸인지 알려주는 라벨"이 있으면 True.
+
+    "결정 사항:"은 라벨이지만 "ㅇ"·"-"·"1."은 글머리 기호일 뿐이다. 글머리만
+    있는 자리에 목록을 넣으면 **제목 없이 내용만 남아** 무슨 항목인지 알 수 없으므로,
+    이 판정으로 제목(섹션 라벨)을 자동으로 붙일지 정한다.
+    """
+    stripped = _NUMBER_PREFIX.sub("", text.strip().strip(_BULLET_CHARS + " "))
+    return bool(stripped.strip(_BULLET_CHARS + " "))
+
+
+def _slot_markers(paragraph) -> set:
+    """그 자리(문단)가 이미 쓰고 있는 계층 기호를 모은다.
+
+    양식이 "ㅇ"·"-"·자동번호를 쓰고 있으면 우리 내용이 같은 기호를 쓰면 안 된다.
+    자동번호(`w:numPr`)와 "1." 같은 글자 번호는 둘 다 `"num"`으로 본다.
+    """
+    used = set()
+    text = paragraph.text.strip()
+    if text:
+        head = text[0]
+        if head in _BULLET_CHARS:
+            used.add(head)
+        if _NUMBER_PREFIX.match(text):
+            used.add("num")
+    pPr = paragraph._p.find(qn("w:pPr"))
+    if pPr is not None and pPr.find(qn("w:numPr")) is not None:
+        used.add("num")
+    return used
+
+
+def _form_number_survives(target, first_line: str, label) -> bool:
+    """양식의 자동 번호가 **결과물에 실제로 남는지** 판정한다.
+
+    남지 않는 번호를 피하면 쓸 수 있는 넘버링("1. 주제")을 공짜로 버리고 사다리
+    아래 기호(`□`)로 내려간다 — 겹치지도 않는 충돌을 피하는 손해다. 세 경우로 갈린다.
+
+    - 제목을 넣는 자리: `_put_section_label`이 번호를 지우므로 남지 않는다.
+    - 라벨을 보존하는 자리("결정 사항:"): 라벨과 함께 번호도 그대로 남는다.
+    - 빈 자리에 첫 줄을 덮어쓰는 자리: 그 줄이 `{%p … %}` 태그면 렌더 시 **문단째
+      삭제**되므로 번호도 사라진다. 태그가 아닌 값 토큰이면 번호가 남는다.
+    """
+    if label:
+        return False
+    if target.text.strip():
+        return True
+    return not first_line.lstrip().startswith("{%")
+
+
+def _choose_markers(used: set) -> dict:
+    """양식이 쓰는 기호를 비껴 우리 계층 기호를 고른다.
+
+    사다리를 앞에서부터 훑어 겹치지 않는 첫 기호를 쓴다. 양식이 사다리를 다
+    쓰고 있으면(=우리가 쓸 계층이 양식보다 깊으면) 마지막 기호로 떨어지되,
+    들여쓰기가 한 단 더 들어가므로 계층은 여전히 구분된다.
+    """
+    return {
+        "topic": next((m for m in _TOPIC_LADDER if m not in used), _TOPIC_LADDER[-1]),
+        "item": next((m for m in _ITEM_LADDER if m not in used), _ITEM_LADDER[-1]),
+    }
+
+
+# --- 블록 라인 서식 ----------------------------------------------------------
 def _line_level(line: str):
     """블록 라인의 계층을 판정한다 — 0=섹션 제목, 1=소제목·값, 2=하위 항목, None=태그.
 
@@ -314,8 +385,7 @@ def _line_level(line: str):
         return None
     if stripped.startswith("["):  # "[논의 내용]" 등 섹션 제목
         return 0
-    head = stripped[:1]
-    if head in _ITEM_MARKS:  # "-"·"·"·"‣"·"◦" 등 하위 항목 기호
+    if stripped[:1] in _ITEM_MARKS:  # "-"·"·"·"‣"·"◦" 등 하위 항목 기호
         return 2
     return 1  # 소제목("1. 주제"·"□ 주제")·스칼라 값
 
@@ -328,8 +398,6 @@ def _style_block_line(paragraph, line: str, depth: int = 0, font=None) -> None:
     아니라 맨 왼쪽에 붙어** 항목 경계가 사라진다. 한 항목이 두세 줄로 넘어가는
     회의록에서 특히 크게 티가 난다.
     """
-    from docx.shared import Cm, Pt
-
     level = _line_level(line)
     if level is None:
         return
@@ -356,66 +424,18 @@ def _style_block_line(paragraph, line: str, depth: int = 0, font=None) -> None:
             run.bold = True
 
 
-def _insert_paragraph_after(paragraph, text: str, style_from=None):
-    """본문에서 paragraph 바로 뒤에 새 문단을 만들어 반환한다.
+def _put_section_label(paragraph, label: str, *, append: bool, depth=0, font=None):
+    """섹션 제목을 문단에 넣는다 — 자동 번호 제거 + 굵게 + 위 여백.
 
-    python-docx에 공개 API가 없어 XML(addnext)로 삽입한다. 표 셀이 아니라
-    문단 기반 양식의 block 채움에서 여러 문단을 순서대로 끼워 넣을 때 쓴다.
-    `style_from`을 주면 그 문단의 서식을 물려받는다(양식 글꼴 유지).
+    번호를 지우는 이유: 제목을 양식의 번호 자리("1." "2.")에 넣으면
+    "1. [논의 내용]"이 되어 바로 아래 주제 번호("1. 컨설팅…")와 **같은 기호가 두
+    계층에 겹친다.** `append=True`면 글머리("ㅇ") 뒤에 이어 붙이고, False면 빈
+    문단을 제목으로 쓴다.
     """
-    from docx.oxml import OxmlElement
-    from docx.text.paragraph import Paragraph
-
-    new_p = OxmlElement("w:p")
-    paragraph._p.addnext(new_p)
-    new_para = Paragraph(new_p, paragraph._parent)
-    if style_from is not None:
-        _copy_paragraph_format(style_from, new_para)
-    if text:
-        new_para.add_run(text)
-    return new_para
-
-
-# 글머리 기호만 있는 자리("ㅇ", "-", "1.")는 라벨이 아니라 빈 값 자리다.
-_BULLET_CHARS = "ㅇ○●◦·•*-–—□■◇◆※∙"
-_NUMBER_PREFIX = re.compile(r"^\(?\d+\s*[.)]\s*")
-
-
-def _has_meaningful_label(text: str) -> bool:
-    """그 자리에 "무엇을 적는 칸인지 알려주는 라벨"이 있으면 True.
-
-    "결정 사항:"은 라벨이지만 "ㅇ"·"-"·"1."은 글머리 기호일 뿐이다. 글머리만
-    있는 자리에 목록을 넣으면 **제목 없이 내용만 남아** 무슨 항목인지 알 수 없으므로,
-    이 판정으로 제목(섹션 라벨)을 자동으로 붙일지 정한다.
-    """
-    stripped = _NUMBER_PREFIX.sub("", text.strip().strip(_BULLET_CHARS + " "))
-    return bool(stripped.strip(_BULLET_CHARS + " "))
-
-
-def _strip_numbering(paragraph) -> None:
-    """문단의 자동 번호(`w:numPr`)를 없앤다.
-
-    섹션 제목을 양식의 번호 자리("1." "2.")에 넣으면 "1. [논의 내용]"이 되어,
-    바로 아래 주제 번호("1. 컨설팅…")와 **같은 기호가 두 계층에 겹친다.**
-    제목 자리의 번호를 없애 계층 기호를 하나만 남긴다.
-    """
-    from docx.oxml.ns import qn
-
     pPr = paragraph._p.find(qn("w:pPr"))
-    if pPr is None:
-        return
-    for num_pr in pPr.findall(qn("w:numPr")):
-        pPr.remove(num_pr)
-
-
-def _put_section_label(
-    paragraph, label: str, *, append: bool, depth: int = 0, font=None
-) -> None:
-    """섹션 제목을 문단에 넣는다 — 번호 제거 + 굵게 + 위 여백.
-
-    `append=True`면 글머리("ㅇ") 뒤에 이어 붙이고, False면 빈 문단을 제목으로 쓴다.
-    """
-    _strip_numbering(paragraph)
+    if pPr is not None:
+        for num_pr in pPr.findall(qn("w:numPr")):
+            pPr.remove(num_pr)
     if append:
         _append_token(paragraph, label)
     else:
@@ -424,143 +444,93 @@ def _put_section_label(
     _style_block_line(paragraph, label, depth, font)
 
 
-def _slot_markers(paragraph) -> set:
-    """그 자리(문단)가 이미 쓰고 있는 계층 기호를 모은다.
+# --- block 삽입 --------------------------------------------------------------
+def _apply_block(target, fields, add_line, *, labeled: bool = False) -> None:
+    """block 토큰을 target 문단(표 셀 첫 문단 | 본문 문단) 자리에 삽입한다.
 
-    양식이 "ㅇ"·"-"·자동번호를 쓰고 있으면 우리 내용이 같은 기호를 쓰면 안 된다.
-    자동번호(`w:numPr`)와 "1." 같은 글자 번호는 둘 다 `"num"`으로 본다.
+    라벨이 있는 자리("결정 사항:"·"ㅇ 논의내용")는 지우지 않고 그 뒤에 블록을 새
+    문단으로 넣는다. 빈 자리면 첫 라인을 그 문단에 넣어 서식을 유지한다.
+    라벨이 없는 자리("ㅇ"·빈 번호 문단)에는 섹션 제목을 자동으로 붙인다.
+
+    `labeled=True`는 **그 자리 밖에** 이미 라벨이 있다는 뜻이다(옆 칸 "논의 내용" 등).
+    자리 안의 글자만 보면 라벨이 없어 보여 제목이 또 붙는다.
+
+    `add_line(line)`은 다음 라인을 놓을 위치를 아는 콜백(표 셀 끝 / 직전 문단 뒤)
+    으로, 만든 문단을 돌려준다 — 표·본문의 차이는 이 콜백에만 있다.
     """
-    from docx.oxml.ns import qn
-
-    used = set()
-    text = paragraph.text.strip()
-    if text:
-        head = text[0]
-        if head in _BULLET_CHARS:
-            used.add(head)
-        if _NUMBER_PREFIX.match(text):
-            used.add("num")
-    pPr = paragraph._p.find(qn("w:pPr"))
-    if pPr is not None and pPr.find(qn("w:numPr")) is not None:
-        used.add("num")
-    return used
-
-
-def _surviving_markers(paragraph, section_label) -> set:
-    """결과물에 **실제로 남을** 양식 기호만 남긴다 — 이것만 피하면 된다.
-
-    섹션 제목을 넣는 자리는 `_put_section_label`이 자동 번호를 지우므로 그 번호는
-    결과에 나타나지 않는다. 이때까지 피하면 쓸 수 있는 넘버링을 괜히 버리게 된다.
-    반면 "ㅇ" 같은 글머리 글자와, 양식 라벨이 유지되는 칸의 번호는 그대로 남는다.
-    """
-    used = _slot_markers(paragraph)
-    if section_label:
+    _validate_fields(fields)  # block_lines보다 먼저 — 어휘 오류를 삽입 전에 낸다
+    font = read_font(target)  # 그 자리가 쓰는 글꼴(런에 직접 지정된 값)
+    # field가 둘 이상이면 block_lines가 항목마다 라벨을 붙이므로 제목은 생략.
+    label = (
+        _SECTION_LABEL[fields[0]]
+        if len(fields) == 1 and not labeled and not _has_meaningful_label(target.text)
+        else None
+    )
+    # 결과물에 **실제로 남을** 양식 기호만 피하면 된다. 제목 자리의 자동 번호나
+    # 태그 문단의 번호는 렌더 전에 사라지므로, 여기서까지 피하면 넘버링을 버린다.
+    used = _slot_markers(target)
+    if not _form_number_survives(target, block_lines(fields)[0], label):
         used.discard("num")
-    return used
-
-
-def _choose_markers(used: set) -> dict:
-    """양식이 쓰는 기호를 비껴 우리 계층 기호를 고른다.
-
-    사다리를 앞에서부터 훑어 겹치지 않는 첫 기호를 쓴다. 양식이 사다리를 다
-    쓰고 있으면(=우리가 쓸 계층이 양식보다 깊으면) 마지막 기호로 떨어지되,
-    들여쓰기가 한 단 더 들어가므로 계층은 여전히 구분된다.
-    """
-    return {
-        "topic": next((m for m in _TOPIC_LADDER if m not in used), _TOPIC_LADDER[-1]),
-        "item": next((m for m in _ITEM_LADDER if m not in used), _ITEM_LADDER[-1]),
-    }
-
-
-def _auto_section_label(target, fields):
-    """제목이 필요한 자리면 붙일 섹션 라벨을, 필요 없으면 None을 돌려준다.
-
-    field가 둘 이상이면 `block_lines`가 이미 항목마다 라벨을 붙이므로 제외한다.
-    """
-    _validate_fields(fields)  # block_lines보다 먼저 불리므로 어휘 검사도 여기서
-    if len(fields) != 1 or _has_meaningful_label(target.text):
-        return None
-    return _SECTION_LABEL[fields[0]]
-
-
-def _apply_inline(cell, fields) -> None:
-    _append_inline(cell.paragraphs[0], fields)
-
-
-def _apply_todo(cell) -> None:
-    """라벨만 있고 데이터가 없는 칸에 빨간 "입력필요"(RichText) 토큰을 넣는다."""
-    _append_token(cell.paragraphs[0], _TODO_TOKEN)
-
-
-def _apply_literal(cell, text) -> None:
-    """원문에서 찾은 값 등 지정 문자열을 평문으로 넣는다."""
-    _append_token(cell.paragraphs[0], text)
-
-
-def _apply_block(cell, fields) -> None:
-    """표 셀에 block 토큰을 삽입한다.
-
-    라벨이 있는 칸("결정 사항:" 등)은 지우지 않고 그 뒤에 블록을 새 문단으로
-    넣는다(inline과 동일한 라벨 보존 규칙). 빈 칸이면 첫 라인을 기존 첫 문단에
-    넣어 셀 서식을 유지한다. 라벨이 없는 자리에는 제목을 자동으로 붙인다.
-    """
-    p0 = cell.paragraphs[0]
-    font = read_font(p0)  # 그 칸이 쓰는 글꼴(런에 직접 지정된 값)
-    label = _auto_section_label(p0, fields)
-    used = _surviving_markers(p0, label)
     lines = block_lines(fields, _choose_markers(used))
     depth = 1 if used else 0  # 양식이 한 계층을 쓰면 그 아래로 들여쓴다
-    if label:  # 제목이 필요한 자리 → 첫 문단은 제목, 블록은 전부 그 뒤에
+    if label:  # 제목이 필요한 자리 → 그 문단은 제목, 블록은 전부 그 뒤에
         _put_section_label(
-            p0, label, append=bool(p0.text.strip()), depth=depth, font=font
+            target, label, append=bool(target.text.strip()), depth=depth, font=font
         )
         rest = lines
-    elif p0.text.strip():  # 라벨 보존: 기존 텍스트 유지, 블록은 전부 뒤에
+    elif target.text.strip():  # 라벨 보존: 기존 텍스트 유지, 블록은 전부 뒤에
         rest = lines
-    else:  # 빈 칸: 첫 라인은 기존 첫 문단에(서식 유지), 나머지는 뒤에
-        _clear_runs(p0)
-        p0.add_run(lines[0])
-        _style_block_line(p0, lines[0], depth, font)
+    else:  # 빈 자리: 첫 라인은 그 문단에(서식 유지), 나머지는 뒤에
+        _clear_runs(target)
+        target.add_run(lines[0])
+        _style_block_line(target, lines[0], depth, font)
         rest = lines[1:]
     for line in rest:
+        _style_block_line(add_line(line), line, depth, font)
+
+
+def _apply_block_cell(cell, fields, *, labeled: bool = False) -> None:
+    """표 셀 채움 — 이어지는 라인은 셀 끝에 문단을 더한다."""
+    p0 = cell.paragraphs[0]
+
+    def add_line(line):
         added = cell.add_paragraph(line)
         _copy_paragraph_format(p0, added)  # 셀 서식 상속(스타일·정렬)
-        _style_block_line(added, line, depth, font)
+        return added
+
+    _apply_block(p0, fields, add_line, labeled=labeled)
 
 
-def _apply_block_paragraph(paragraph, fields) -> None:
-    """문단 기반 양식에 block 토큰을 삽입한다.
+def _apply_block_paragraph(paragraph, fields, *, labeled: bool = False) -> None:
+    """본문 문단 채움 — 이어지는 라인은 직전 문단 뒤에 XML로 끼워 넣는다."""
+    prev = [paragraph]
 
-    라벨이 있는 문단("ㅇ 논의내용" 등)은 지우지 않고 그 뒤에 블록을 새 문단으로
-    넣는다. 빈 문단이면 첫 라인을 그 문단에 넣고 나머지를 뒤에 삽입한다.
-    라벨이 없는 자리("ㅇ"·빈 번호 문단)에는 제목을 자동으로 붙인다.
-    """
-    font = read_font(paragraph)  # 그 자리가 쓰는 글꼴(런에 직접 지정된 값)
-    label = _auto_section_label(paragraph, fields)
-    used = _surviving_markers(paragraph, label)
-    lines = block_lines(fields, _choose_markers(used))
-    depth = 1 if used else 0  # 양식이 한 계층을 쓰면 그 아래로 들여쓴다
-    if label:  # 제목이 필요한 자리 → 그 문단은 제목, 블록은 전부 뒤에
-        _put_section_label(
-            paragraph,
-            label,
-            append=bool(paragraph.text.strip()),
-            depth=depth,
-            font=font,
-        )
-        rest = lines
-    elif paragraph.text.strip():  # 라벨 보존: 기존 문단 유지, 블록은 전부 뒤에
-        rest = lines
-    else:  # 빈 문단: 첫 라인은 그 문단에, 나머지는 뒤에
-        _clear_runs(paragraph)
-        paragraph.add_run(lines[0])
-        _style_block_line(paragraph, lines[0], depth, font)
-        rest = lines[1:]
-    prev = paragraph
-    for line in rest:
+    def add_line(line):
         # 서식은 항상 원본 문단에서 물려받는다(직전 삽입분이 아니라).
-        prev = _insert_paragraph_after(prev, line, style_from=paragraph)
-        _style_block_line(prev, line, depth, font)
+        prev[0] = _insert_paragraph_after(prev[0], line, style_from=paragraph)
+        return prev[0]
+
+    _apply_block(paragraph, fields, add_line, labeled=labeled)
+
+
+# --- 매핑 항목 적용 ----------------------------------------------------------
+def _require(entry: dict, key: str, where: str):
+    """매핑 항목에서 필수 키를 꺼낸다. 없으면 원시 KeyError 대신 안내 메시지."""
+    if key not in entry:
+        raise ValueError(
+            f"매핑 항목({where})에 필수 키 '{key}'가 없습니다. "
+            "각 fills 항목은 row·col·mode·fields를, paragraphs 항목은 para·mode·fields를 가져야 합니다."
+        )
+    return entry[key]
+
+
+def _at(seq, idx, what: str, where: str):
+    """범위를 검사하고 seq[idx]를 돌려준다 — 원시 IndexError 대신 안내 메시지."""
+    if idx < 0 or idx >= len(seq):
+        raise IndexError(
+            f"{what} {idx}이(가) 범위를 벗어났습니다({where}는 {len(seq)}개)."
+        )
+    return seq[idx]
 
 
 def _check_not_shaded(cell, entry: dict, where: str) -> None:
@@ -602,39 +572,69 @@ def is_duplicate_hint(table, row_index: int, cell) -> bool:
     )
 
 
-def _clear_placeholder_cell(cell, force: bool = False) -> None:
-    """예시 문구가 든 칸을 비운다 — 글꼴은 문단 부호에 남겨 값이 같은 서식으로 들어가게.
+def has_row_label(table, row_index: int, cell) -> bool:
+    """같은 행의 다른 칸이 이 칸의 라벨 역할을 하고 있으면 True.
 
-    예시가 여러 줄인 칸("1. 내용을 작성하세요." ×4)도 있으므로 첫 문단만 남기고
-    나머지 문단은 통째로 제거한다. `force`면 문구 판정 없이 비운다.
+    한국 회의록 양식의 표준 배치는 `논의 내용 | (빈칸)`처럼 라벨 칸과 값 칸을
+    나란히 두는 것이다. 값 칸 안의 글자만 보면 라벨이 없어 보여 섹션 제목이
+    자동으로 붙고, 결과가 `논의 내용 | [논의 내용] …`으로 같은 말이 두 번 나온다.
+    그래서 자리 안뿐 아니라 **같은 행**도 함께 보고 제목을 붙일지 정한다.
+
+    라벨이 값 칸 위쪽 행에 있는 양식(라벨 행 + 아래 빈 행)은 행이 달라 여기서
+    잡히지 않는다 — 그런 자리는 매핑에서 `"auto_label": false`로 제목을 끈다.
+    병합 칸은 `row.cells`가 같은 칸을 여러 번 돌려주므로 XML 요소로 자기 자신을 건다.
     """
-    if not force and not is_placeholder(cell.text):
-        return
-    first = cell.paragraphs[0]
-    font = read_font(first)
-    for extra in list(cell.paragraphs[1:]):
-        extra._p.getparent().remove(extra._p)
-    _clear_runs(first)
-    mark_font(first, font)
+    return any(
+        other._tc is not cell._tc and _has_meaningful_label(other.text)
+        for other in table.rows[row_index].cells
+    )
 
 
-def _clear_placeholder_paragraph(paragraph) -> None:
-    """예시 문구가 든 문단을 비운다(글꼴은 문단 부호에 보존)."""
-    if not is_placeholder(paragraph.text):
+def _resolve_labeled(entry: dict, detected: bool) -> bool:
+    """섹션 제목을 붙일지 정한다 — 매핑의 `auto_label`이 자동 판정보다 우선.
+
+    자동 판정(같은 행 라벨 유무)으로 대부분 맞지만, 라벨이 위쪽 행에 있거나
+    옆 칸 라벨이 이 항목과 무관한 양식도 있다. 구조 JSON을 보는 쪽이 사람이므로
+    `"auto_label": false`(제목 끄기)·`true`(제목 강제)로 뒤집을 수 있게 둔다.
+    """
+    override = entry.get("auto_label")
+    return detected if override is None else not override
+
+
+def _clear_placeholder(paragraph, *, text=None, extras=(), force: bool = False) -> None:
+    """예시 문구가 든 자리를 비운다 — 글꼴은 문단 부호에 남겨 값이 같은 서식으로.
+
+    판정 대상은 `text`(표 셀이면 칸 전체 글자), 없으면 문단 글자다. 표 셀은 예시가
+    여러 줄인 경우가 있으므로("1. 내용을 작성하세요." ×4) 첫 문단만 남기고 `extras`
+    문단은 통째로 제거한다. `force`면 문구 판정 없이 비운다.
+    """
+    if not force and not is_placeholder(paragraph.text if text is None else text):
         return
     font = read_font(paragraph)
+    for extra in list(extras):
+        extra._p.getparent().remove(extra._p)
     _clear_runs(paragraph)
     mark_font(paragraph, font)
 
 
-def _require(entry: dict, key: str, where: str):
-    """매핑 항목에서 필수 키를 꺼낸다. 없으면 원시 KeyError 대신 안내 메시지."""
-    if key not in entry:
+def _apply_mode(entry: dict, paragraph, where: str, block_apply) -> None:
+    """mode에 따라 토큰을 넣는다(inline|block|todo|literal) — 표·문단 공통 분기.
+
+    block만 표(셀 끝에 문단 추가)와 본문(문단 뒤에 삽입)의 방식이 달라 콜백으로 받는다.
+    """
+    mode = _require(entry, "mode", where)
+    if mode == "inline":
+        _append_token(paragraph, inline_tokens(_require(entry, "fields", where)))
+    elif mode == "block":
+        block_apply(_require(entry, "fields", where))
+    elif mode == "todo":  # 라벨만 있고 데이터가 없는 자리 → 빨간 "입력필요"
+        _append_token(paragraph, _TODO_TOKEN)
+    elif mode == "literal":  # 원문에서 찾은 값 등 지정 문자열을 평문으로
+        _append_token(paragraph, _require(entry, "text", where))
+    else:
         raise ValueError(
-            f"매핑 항목({where})에 필수 키 '{key}'가 없습니다. "
-            "각 fills 항목은 row·col·mode·fields를, paragraphs 항목은 para·mode·fields를 가져야 합니다."
+            f"알 수 없는 mode '{mode}' (inline|block|todo|literal 중 하나)."
         )
-    return entry[key]
 
 
 def _apply_table_fills(doc, mapping) -> None:
@@ -643,89 +643,60 @@ def _apply_table_fills(doc, mapping) -> None:
     표는 항목별 `table` 키로 고르고, 없으면 최상위 `table`(기본 0)을 쓴다.
     한 양식에 표가 여러 개여도 한 번의 실행으로 채울 수 있다.
     """
-    fills = mapping.get("fills", [])
-    if not fills:
-        return
     default_ti = mapping.get("table", 0)
-    for fill in fills:
+    for fill in mapping.get("fills", []):
         ti = fill.get("table", default_ti)
-        if ti < 0 or ti >= len(doc.tables):
-            raise IndexError(
-                f"표 인덱스 {ti}가 범위를 벗어났습니다(문서의 표는 {len(doc.tables)}개)."
-            )
-        table = doc.tables[ti]
+        table = _at(doc.tables, ti, "표 인덱스", "문서의 표")
         r = _require(fill, "row", "fills")
         c = _require(fill, "col", "fills")
-        mode = _require(fill, "mode", "fills")
-        if r < 0 or r >= len(table.rows):
-            raise IndexError(
-                f"행 {r}이(가) 표 범위를 벗어났습니다(표 {ti}의 행은 {len(table.rows)}개)."
-            )
-        row_cells = table.rows[r].cells
-        if c < 0 or c >= len(row_cells):
-            raise IndexError(
-                f"열 {c}이(가) 표 범위를 벗어났습니다(행 {r}의 열은 {len(row_cells)}개)."
-            )
-        cell = row_cells[c]
+        _require(fill, "mode", "fills")  # 문서를 건드리기 전에 키 누락을 알린다
+        row_cells = _at(table.rows, r, "행", f"표 {ti}의 행").cells
+        cell = _at(row_cells, c, "열", f"행 {r}의 열")
         _check_not_shaded(cell, fill, f"fills[표{ti} {r},{c}]")
         # 예시 문구·라벨 복사 힌트는 지우고 그 자리에 값을 넣는다.
-        _clear_placeholder_cell(cell, force=is_duplicate_hint(table, r, cell))
-        if mode == "inline":
-            _apply_inline(cell, _require(fill, "fields", "fills"))
-        elif mode == "block":
-            _apply_block(cell, _require(fill, "fields", "fills"))
-        elif mode == "todo":
-            _apply_todo(cell)
-        elif mode == "literal":
-            _apply_literal(cell, _require(fill, "text", "fills"))
-        else:
-            raise ValueError(
-                f"알 수 없는 mode '{mode}' (inline|block|todo|literal 중 하나)."
-            )
+        _clear_placeholder(
+            cell.paragraphs[0],
+            text=cell.text,
+            extras=cell.paragraphs[1:],
+            force=is_duplicate_hint(table, r, cell),
+        )
+        # 옆 칸이 라벨인 배치(`논의 내용 | (빈칸)`)에서는 섹션 제목을 붙이지 않는다.
+        labeled = _resolve_labeled(fill, has_row_label(table, r, cell))
+        _apply_mode(
+            fill,
+            cell.paragraphs[0],
+            "fills",
+            lambda f: _apply_block_cell(cell, f, labeled=labeled),
+        )
 
 
 def _apply_paragraph_fills(doc, mapping) -> None:
     """문단 채움(`paragraphs`). 인덱스를 먼저 스냅샷해 삽입에 따른 인덱스 밀림을 피한다."""
-    para_fills = mapping.get("paragraphs", [])
-    if not para_fills:
-        return
     paras = doc.paragraphs
-    n = len(paras)
     # block 삽입이 뒤 인덱스를 밀기 전에 대상 문단 객체를 먼저 확보한다.
-    targets = []
-    for pf in para_fills:
-        idx = _require(pf, "para", "paragraphs")
-        if idx < 0 or idx >= n:
-            raise IndexError(
-                f"문단 인덱스 {idx}가 범위를 벗어났습니다(본문 문단은 {n}개)."
-            )
-        targets.append((paras[idx], pf))
+    targets = [
+        (_at(paras, _require(pf, "para", "paragraphs"), "문단 인덱스", "본문 문단"), pf)
+        for pf in mapping.get("paragraphs", [])
+    ]
     for paragraph, pf in targets:
-        _clear_placeholder_paragraph(paragraph)  # 예시 문구는 지우고 채운다
-        mode = _require(pf, "mode", "paragraphs")
-        if mode == "inline":
-            _append_inline(paragraph, _require(pf, "fields", "paragraphs"))
-        elif mode == "block":
-            _apply_block_paragraph(paragraph, _require(pf, "fields", "paragraphs"))
-        elif mode == "todo":
-            _append_token(paragraph, _TODO_TOKEN)
-        elif mode == "literal":
-            _append_token(paragraph, _require(pf, "text", "paragraphs"))
-        else:
-            raise ValueError(
-                f"알 수 없는 mode '{mode}' (inline|block|todo|literal 중 하나)."
-            )
+        _clear_placeholder(paragraph)  # 예시 문구는 지우고 채운다
+        # 본문 문단은 옆 칸이 없어 자동 판정 대상이 아니다(자리 안의 라벨만 본다).
+        # 앞 문단이 라벨인 양식은 매핑에서 `"auto_label": false`로 끈다.
+        labeled = _resolve_labeled(pf, False)
+        _apply_mode(
+            pf,
+            paragraph,
+            "paragraphs",
+            lambda f, p=paragraph, lb=labeled: _apply_block_paragraph(p, f, labeled=lb),
+        )
 
 
+# --- 행 반복 표(row_repeats) -------------------------------------------------
 def _make_tag_row(data_tr, tag: str):
     """데이터 행 XML을 복제해 모든 셀을 비우고 첫 셀에 `{%tr ...%}` 태그만 넣는다.
 
     셀 수·gridSpan을 데이터 행과 동일하게 유지해야 표가 깨지지 않으므로 deepcopy를 쓴다.
     """
-    import copy
-
-    from docx.oxml.ns import qn
-
     new = copy.deepcopy(data_tr)
     for tc in new.findall(qn("w:tc")):
         for p in tc.findall(qn("w:p")):
@@ -759,11 +730,8 @@ def _apply_row_repeats(doc, mapping) -> None:
     데이터 행의 지정 컬럼에 하위필드 토큰을 넣고, 그 앞/뒤에 for·endfor 태그 행을
     삽입한다. 렌더 시 docxtpl가 데이터 행을 항목 수만큼 반복하고 태그 행은 삭제한다.
     """
-    repeats = mapping.get("row_repeats", [])
-    if not repeats:
-        return
     default_ti = mapping.get("table", 0)
-    for entry in repeats:
+    for entry in mapping.get("row_repeats", []):
         field = _require(entry, "field", "row_repeats")
         if field not in _ROW_REPEAT:
             raise ValueError(
@@ -772,33 +740,19 @@ def _apply_row_repeats(doc, mapping) -> None:
             )
         spec = _ROW_REPEAT[field]
         ti = entry.get("table", default_ti)
-        if ti < 0 or ti >= len(doc.tables):
-            raise IndexError(
-                f"표 인덱스 {ti}가 범위를 벗어났습니다(문서의 표는 {len(doc.tables)}개)."
-            )
-        table = doc.tables[ti]
+        table = _at(doc.tables, ti, "표 인덱스", "문서의 표")
         row = _require(entry, "row", "row_repeats")
-        if row < 0 or row >= len(table.rows):
-            raise IndexError(
-                f"행 {row}이(가) 표 범위를 벗어났습니다(표 {ti}의 행은 {len(table.rows)}개)."
-            )
-        cols = _require(entry, "cols", "row_repeats")
-        data_row = table.rows[row]
+        data_row = _at(table.rows, row, "행", f"표 {ti}의 행")
         row_cells = data_row.cells
-        for subfield, col_idx in cols.items():
+        for subfield, col_idx in _require(entry, "cols", "row_repeats").items():
             if subfield not in spec["col_tokens"]:
                 raise ValueError(
                     f"row_repeats field '{field}'에 없는 하위필드 '{subfield}'. "
                     "허용: " + ", ".join(sorted(spec["col_tokens"]))
                 )
-            if col_idx < 0 or col_idx >= len(row_cells):
-                raise IndexError(
-                    f"열 {col_idx}이(가) 표 범위를 벗어났습니다(행 {row}의 열은 {len(row_cells)}개)."
-                )
-            _check_not_shaded(
-                row_cells[col_idx], entry, f"row_repeats[{row},{col_idx}]"
-            )
-            _set_cell_token(row_cells[col_idx], spec["col_tokens"][subfield])
+            cell = _at(row_cells, col_idx, "열", f"행 {row}의 열")
+            _check_not_shaded(cell, entry, f"row_repeats[{row},{col_idx}]")
+            _set_cell_token(cell, spec["col_tokens"][subfield])
         data_tr = data_row._tr
         for_tag = f"{{%tr for {spec['var']} in {spec['iter']} %}}"
         data_tr.addprevious(_make_tag_row(data_tr, for_tag))
@@ -816,17 +770,9 @@ def _collect_drop_rows(doc, mapping) -> list:
     doomed = []
     for entry in mapping.get("drop_rows", []):
         ti = entry.get("table", mapping.get("table", 0))
-        if ti < 0 or ti >= len(doc.tables):
-            raise IndexError(
-                f"표 인덱스 {ti}가 범위를 벗어났습니다(문서의 표는 {len(doc.tables)}개)."
-            )
-        table = doc.tables[ti]
+        table = _at(doc.tables, ti, "표 인덱스", "문서의 표")
         for r in _require(entry, "rows", "drop_rows"):
-            if r < 0 or r >= len(table.rows):
-                raise IndexError(
-                    f"행 {r}이(가) 표 범위를 벗어났습니다(표 {ti}의 행은 {len(table.rows)}개)."
-                )
-            doomed.append(table.rows[r]._tr)
+            doomed.append(_at(table.rows, r, "행", f"표 {ti}의 행")._tr)
     return doomed
 
 
@@ -836,8 +782,6 @@ def apply_mapping(template_path: str, mapping: dict, out_path: str) -> None:
     `fills`(표 셀)·`paragraphs`(본문 문단)·`row_repeats`(행 반복 표) 중
     있는 것만 적용한다.
     """
-    from docx import Document
-
     resolved = resolve_input_path(template_path, must_exist=True)
     doc = Document(str(resolved))
     doomed = _collect_drop_rows(doc, mapping)  # 바꾸기 전 인덱스로 확보

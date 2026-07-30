@@ -6,67 +6,51 @@ description: Use when the user wants structured meeting minutes (회의록) from
 # 회의록 자동 생성 Skill
 
 텍스트·STT·오디오(녹취) 회의 내용을 구조화된 회의록(Markdown + Word .docx)으로 변환한다.
-사용자가 준 .docx 양식(표·문단)이 있으면 그 양식에 맞춰 채운다.
-파이프라인은 4단계이며 각 단계의 계약은 `schema/minutes.schema.json`이다.
+사용자가 준 .docx 양식(표·문단)이 있으면 그 양식에 맞춰 채운다. 파이프라인은 4단계이며
+각 단계의 계약은 `schema/minutes.schema.json`이다.
 
-## 경로 규칙 (중요)
+## 참조 문서 — 해당 분기에 들어갈 때만 읽는다
 
-아래 명령의 `scripts/`·`schema/`·`requirements*.txt`는 모두 **이 SKILL.md가 있는
-스킬 디렉토리** 기준 경로다. 실행할 때는 스킬 디렉토리 기준 절대경로로 바꿔서 실행한다.
-(이 저장소에서는 스킬 디렉토리가 `.claude/skills/meeting-minutes/` 이므로
-예: `python .claude/skills/meeting-minutes/scripts/transcribe.py ...`)
-반면 `output/`은 **사용자의 현재 작업 디렉토리** 기준이다 — 산출물은 사용자 프로젝트에 남긴다.
+- `references/input-sources.md` — 입력 파일을 못 찾아 탐색 폴더를 넓혀야 하거나, 입력 어댑터를 추가·삭제할 때.
+- `references/form-mapping.md` — [4]에서 **토큰 없는 양식을 자동으로 채울 때 반드시.** `mapping.json` 작성 규칙.
+- `references/template-tokens.md` — 사용자가 양식에 토큰을 직접 넣어 왔거나, 넣는 법을 안내할 때.
 
-## 산출물 위치 규칙 (중요)
+## 경로·산출물 규칙 (중요)
 
-**최종 docx만 `output/`에, 나머지 중간 파일은 전부 `output/.work/`에 둔다.** 아래 단계별
-명령은 이미 이 규칙대로 경로를 적어 두었으니 그대로 실행하면 된다(머릿속에서 경로를 바꿀 필요 없음).
-
-- **최종본:** `output/회의록_<제목>_<생성일 YYYY-MM-DD>.docx` — 사용자에게 전달하는 결과물.
-  이름은 손으로 짓지 말고 [4]에서 `output_naming.py`로 구한다(제목은 앞부분 몇 단어만
-  공백 그대로·금지문자 제거해 간결하게, 날짜는 회의 일시가 아니라 **파일을 만든 날**).
-- **중간 파일(`output/.work/`):** STT 원문(`meeting.txt`), 추출 데이터(`minutes.json`),
-  검토용 Markdown(`minutes.md`), 양식 구조 JSON, 매핑(`mapping.json`), 토큰화 중간
-  docx(`*_tokenized.docx`) 등. `minutes.md`도 여기 두되 내용은 [3]에서 사용자에게 보여준다.
-
-`output/` 전체가 `.gitignore` 대상이라 `.work/`도 자동 제외된다. 중간 파일은 다음번 수정 때
-재사용할 수 있게 지우지 말고 남겨 둔다.
+- `scripts/`·`schema/`·`references/`는 **이 SKILL.md가 있는 스킬 디렉토리** 기준이다. 실행할 때는
+  절대경로로 바꾼다(예: `python .claude/skills/meeting-minutes/scripts/transcribe.py ...`).
+- `output/`은 **사용자의 현재 작업 디렉토리** 기준 — 산출물은 사용자 프로젝트에 남긴다.
+- **최종 docx만 `output/`에, 중간 파일은 전부 `output/.work/`에 둔다.** 아래 명령은 이미 이 규칙대로
+  경로를 적어 두었으니 그대로 실행하면 된다.
+  - 최종본 `output/회의록_<제목>_<생성일 YYYY-MM-DD>.docx` — 이름은 손으로 짓지 말고 [4]에서
+    `output_naming.py`로 구한다(날짜는 회의 일시가 아니라 **파일을 만든 날**).
+  - 중간 파일: `meeting.txt`·`minutes.json`·`minutes.md`·양식 구조 JSON·`mapping.json`·
+    `*_tokenized.docx`. `minutes.md`도 여기 두되 내용은 [3]에서 사용자에게 보여준다.
+- `output/` 전체가 `.gitignore` 대상이다. 중간 파일은 다음번 수정 때 재사용하게 지우지 않는다.
 
 ## 사전 준비
 
-필요 패키지 설치(최초 1회): `pip install -r requirements.txt`
-(오디오 STT를 쓸 때만 추가로: `pip install -r requirements-stt.txt`)
-출력 폴더 준비: `output/`와 중간 파일용 `output/.work/`가 없으면 만든다
-(`mkdir -p output/.work`).
+- 패키지 설치(최초 1회) `pip install -r requirements.txt` — 오디오 STT를 쓸 때만 `requirements-stt.txt`도.
+- 출력 폴더 `mkdir -p output/.work` — 이후 단계는 두 폴더가 있다고 전제한다.
 
-## 단계별 절차
+## [1] 입력 확보
 
-### [1] 입력 확보 (텍스트 / 로컬 STT / 클라우드 STT)
-사용자가 준 입력의 종류에 따라 소스를 고른다.
+- **텍스트**(붙여넣은 내용 또는 `.txt` 경로): `--source text`로 바로 실행.
+- **오디오 파일**: 기본은 클라우드 `--source groq` — 작업 폴더 `.env`에 `GROQ_API_KEY=...`를 두면
+  자동 로드된다(실제 환경변수가 있으면 그쪽 우선). 오프라인이 필요하면 `--source whisper`
+  (`requirements-stt.txt` 설치 필요). 오디오를 외부로 보내는 문제라 **어느 쪽을 쓸지 사용자에게 확인**한다.
 
-- **텍스트**(붙여넣은 내용 또는 `.txt` 경로): `--source text`
-- **오디오 파일**: 로컬/클라우드 중 무엇을 쓸지 사용자에게 확인한다.
-  - 로컬(오프라인, `pip install -r requirements-stt.txt` 필요): `--source whisper`
-  - 클라우드(Groq, `GROQ_API_KEY` 필요): `--source groq`
-    - 키는 작업 디렉토리의 `.env`에 `GROQ_API_KEY=...`로 두면 `transcribe.py`가
-      자동 로드한다(`.env`는 .gitignore 대상). 실제 환경변수가 있으면 그쪽이 우선.
-
-정규화된 회의 텍스트를 얻는다:
 `python scripts/transcribe.py --source <text|whisper|groq> <입력> > output/.work/meeting.txt`
 
-(먼저 `output/.work/`가 없으면 만든다.) 이 표준 출력(정규화된 회의 원문)을 [2] 추출 단계의 입력으로 사용한다.
-STT 라이브러리 미설치나 `GROQ_API_KEY` 미설정 시, 명령이 안내 메시지와 함께
-실패하므로 사용자에게 그대로 전달해 설치/설정을 요청한다.
+이 표준 출력(정규화된 회의 원문)을 [2]의 입력으로 쓴다. 입력 파일은 **이름만** 줘도 공통 위치를
+탐색해 찾는다. 실패하면 명령이 원인(라이브러리 미설치·키 미설정·파일 못 찾음)을 안내하므로
+그대로 사용자에게 전달해 설치/설정을 요청한다.
 
-**입력 파일 위치 자동 탐색**: `<입력>`이 작업 폴더에 없더라도 **파일 이름만** 주면
-공통 위치(작업 폴더 → 바탕화면 → 다운로드 → 문서 → 홈)를 재귀 탐색해 찾는다
-(text/whisper/groq 모두 공통 헬퍼 `resolve_input_path` 사용). 추가 폴더가 필요하면
-`MEETING_INPUT_DIRS`(os.pathsep 구분) 환경변수로 앞쪽에 넣을 수 있다. 못 찾으면
-검색한 위치를 안내하며 실패하므로, 정확한 경로를 받거나 폴더를 추가한다.
+## [2] 추출 (이 단계는 네가 직접 수행)
 
-### [2] 추출 (이 단계는 네가 직접 수행)
-회의 원문을 읽고 `schema/minutes.schema.json`을 **정확히** 따르는
-`minutes.json`을 작성한다. 규칙:
+회의 원문을 읽고 `schema/minutes.schema.json`을 **정확히** 따르는 `minutes.json`을
+`output/.work/`에 쓴다.
+
 - 9개 항목을 모두 채운다: title, date, attendees, purpose, discussion, decisions, action_items, next_meeting, notes.
 - 원문에 없는 정보는 **지어내지 않는다**. 없으면 `null`(date/purpose/next_meeting/owner/due) 또는 빈 배열(attendees/decisions/action_items/notes).
 - `discussion`은 주제별로 `{topic, points}`로 묶는다.
@@ -75,120 +59,40 @@ STT 라이브러리 미설치나 `GROQ_API_KEY` 미설정 시, 명령이 안내 
   - "~합니다/~한다/~이다" 종결과 "따라서·또한·그리고" 같은 접속 부사를 빼고, 한 항목에 한 사실만 담는다.
   - 수치·근거·조건은 괄호로 붙인다. 인과·순서는 `→`, 대비는 `vs`로 표현한다.
   - **압축한다고 정보를 빠뜨리거나 왜곡하지 않는다** — 문장을 줄이는 것이지 사실을 줄이는 게 아니다. 원문의 수치·주체·조건은 그대로 살린다.
+  - 서술식 ✗ "라마단이 지난 8월 18일에 끝났습니다. 따라서 중동 항로의 거래량과 실제 적재 비율이 다시 늘어날 것으로 보입니다."
+  - 개조식 ✓ "라마단 종료 후 중동항로 물동량 회복 예상 (8/18~)"
 
-  ```
-  [서술식 ✗] 라마단이 지난 8월 18일에 끝났습니다. 따라서 중동 항로의 거래량과
-             실제 적재 비율이 다시 늘어날 것으로 보입니다.
-  [개조식 ✓] 라마단 종료 후 중동항로 물동량 회복 예상 (8/18~)
-  ```
-- 결과를 `output/.work/minutes.json`으로 저장한다.
+검증: 렌더러가 `load_minutes()`로 로드하며 스키마를 자동 검증한다. ValidationError가 나면
+`minutes.json`을 스키마에 맞게 고친다.
 
-검증: `render_markdown.py`/`render_docx.py`가 `load_minutes()`로 로드하며
-자동으로 스키마 검증한다. 검증 실패(ValidationError) 시 `minutes.json`을
-스키마에 맞게 수정한다.
+## [3] Markdown 생성 및 사용자 검토
 
-### [3] Markdown 생성 및 사용자 검토
 `python scripts/render_markdown.py output/.work/minutes.json output/.work/minutes.md`
-생성된 Markdown을 사용자에게 보여주고 검토를 요청한다.
-사용자가 수정을 요청하면 `minutes.json`을 고치고 이 단계를 반복한다.
 
-### [4] docx 생성 (사용자 승인 후)
+생성된 Markdown을 사용자에게 보여주고 검토를 요청한다. 수정 요청이 오면 `minutes.json`을 고치고 이 단계를 반복한다.
+
+## [4] docx 생성 (사용자 승인 후)
+
 **먼저 최종 파일명을 구한다:** `python scripts/output_naming.py output/.work/minutes.json .docx [양식.docx]`
-→ 출력된 이름을 최종 경로 `output/<그 이름>`으로 쓴다. 아래 명령의 `output/<최종.docx>`가
-바로 이 경로이며, 나머지 중간 파일은 모두 `output/.work/`에 둔다.
-- **양식을 쓸 때는 세 번째 인자로 양식 경로를 넘긴다** — 양식명이 파일명 맨 앞에 붙어
-  (예: `누리미디어_회의록_주간보고 검토_2026-07-22.docx`, `KISA_회의록_...`) **같은 회의를
-  여러 양식에 채워도 파일이 서로 겹쳐 덮이지 않는다.**
-- 양식이 없으면 세 번째 인자를 생략한다(예: `회의록_3분기 로드맵_2026-07-22.docx`).
+→ 출력된 이름을 `output/<그 이름>`으로 쓴다. **양식을 쓸 때는 세 번째 인자로 양식 경로를 넘긴다**
+— 양식명이 파일명 앞에 붙어(`누리미디어_회의록_...`) 같은 회의를 여러 양식에 채워도 파일이 서로
+덮이지 않는다. 양식이 없으면 생략한다(`회의록_3분기 로드맵_2026-07-22.docx`).
 
-사용자가 **회의록 양식(.docx 템플릿)**을 제공했는지에 따라 렌더러를 고른다.
-
-- **양식 없음(기본):**
-  `python scripts/render_docx.py output/.work/minutes.json output/<최종.docx>`
-- **양식 있음(.docx 템플릿):** 먼저 구조를 확인해 분기한다.
-  `python scripts/inspect_template.py <template.docx>` → 구조 JSON(`has_tokens`, `blocks`[표·문단이 본문에 놓인 순서], `tables`[칸 라벨·좌표·`is_empty`·`merged`·`shaded`], `paragraphs`[문단 index·텍스트·`is_empty`·`numbered`]).
-  - **토큰 있음(`has_tokens: true`):** 그대로
+- **양식 없음(기본):** `python scripts/render_docx.py output/.work/minutes.json output/<최종.docx>`
+- **양식 있음:** `python scripts/inspect_template.py <template.docx>`로 구조 JSON을 얻어 분기한다
+  (`has_tokens`, `blocks`[표·문단이 놓인 순서], `tables`[라벨·좌표·`is_empty`·`merged`·`shaded`],
+  `paragraphs`[index·텍스트·`is_empty`·`numbered`]).
+  - **토큰 있음(`has_tokens: true`):**
     `python scripts/render_docx_template.py <template.docx> output/.work/minutes.json output/<최종.docx>`
-  - **토큰 없음(`has_tokens: false`) → 자동 매핑 (표·문단 양식 모두 지원):**
-    1. 구조 JSON을 읽고 9항목을 알맞은 칸/문단에 배치한 매핑을 `output/.work/mapping.json`으로 작성한다(아래 "자동 매핑 규칙"). 표 서식이면 `fills`로 표 칸에, 문단 서식이면 `paragraphs`로 본문 문단에 매핑한다. 표와 문단이 섞인 양식이면 둘 다 쓴다.
+  - **토큰 없음(`has_tokens: false`) → 자동 매핑** (표·문단 양식 모두 지원):
+    1. **`references/form-mapping.md`를 읽고** 9항목을 알맞은 칸/문단에 배치한 매핑을
+       `output/.work/mapping.json`으로 작성한다.
     2. `python scripts/apply_form_mapping.py <template.docx> output/.work/mapping.json output/.work/<양식>_tokenized.docx`
     3. `python scripts/render_docx_template.py output/.work/<양식>_tokenized.docx output/.work/minutes.json output/<최종.docx>`
-    4. **매핑 요약을 사용자에게 텍스트로 보고**한다 — 어느 칸/문단에 무엇을 넣었는지, 데이터 없이 비워둔 곳, 전용 자리가 없어 다른 곳에 함께 넣은 항목.
-  - 템플릿 파일은 이름만 줘도 공통 위치를 탐색한다(`resolve_input_path` 사용).
-  - 사용자가 **hwp/pdf 양식**을 주면, 한글/워드에서 **.docx로 저장(다른 이름으로 저장 → Word)**해 달라고 요청한다. 렌더러는 .docx만 받는다.
-  - 표시자 문법 오류·.docx 아님·파일 없음 시 명확한 오류가 나므로 그대로 사용자에게 전달한다.
+    4. **매핑 요약을 사용자에게 텍스트로 보고**한다 — 어느 칸/문단에 무엇을 넣었는지, 데이터
+       없이 비워둔 곳, 전용 자리가 없어 다른 곳에 함께 넣은 항목.
+  - 양식 파일도 입력과 같이 **이름만** 줘도 공통 위치를 탐색해 찾는다.
+  - **hwp/pdf 양식**을 주면 한글/워드에서 **.docx로 저장(다른 이름으로 저장 → Word)**해 달라고 요청한다.
+  - 표시자 문법 오류·.docx 아님·파일 없음은 명확한 오류가 나므로 그대로 사용자에게 전달한다.
 
-최종 `.docx` 경로를 사용자에게 안내한다.
-
-#### 자동 매핑 규칙 (토큰 없는 표·문단 양식)
-`mapping.json`은 표 칸 채움 `fills`와 본문 문단 채움 `paragraphs`를 가진다. 표 양식이면 `fills`만, 문단 양식이면 `paragraphs`만, 섞인 양식이면 둘 다 쓴다.
-
-```json
-{
-  "table": 0,
-  "fills":      [ {"row": 1, "col": 0, "mode": "inline", "fields": ["title"]} ],
-  "paragraphs": [ {"para": 4, "mode": "block",  "fields": ["decisions"]} ]
-}
-```
-
-- `fills`는 표 칸을 `{"row", "col", "mode", "fields"}`로, `paragraphs`는 본문 문단을 `{"para", "mode", "fields"}`로 지정한다. `para`는 inspect의 `paragraphs[].index`(= `doc.paragraphs` 위치)와 일치.
-- **표가 여러 개면 항목마다 `"table": n`을 준다**(생략 시 최상위 `table`, 기본 0). 표 5개짜리 양식도 한 번의 실행으로 채운다 — 표별로 나눠 여러 번 실행할 필요 없다.
-- `drop_rows` — **양식이 깔아 둔 예시 행이 데이터보다 많이 남을 때** 지운다. `{"table": 3, "rows": [2,3,4]}` 형태로 최상위 `drop_rows`에 넣으면 그 행들이 삭제된다(다른 인덱스는 원본 기준 그대로 쓰면 된다 — 삭제는 맨 마지막에 일어난다). 결정사항·실행항목 표처럼 빈 예시 행이 4~5줄 깔린 양식에 쓴다.
-- **예시 문구는 스크립트가 알아서 지운다**: 값 칸에 "내용을 작성하세요.", "2025년 00월 00일", "OO팀 OOO" 같은 예시가 들어 있으면 라벨이 아니라 지워야 할 자리다. `apply_form_mapping.py`가 작성 요청 문구와 `O`·`0` 반복 표기를 알아보고 비운 뒤 값을 넣는다(여러 줄 예시도 통째로 제거). 값 칸이 **라벨과 똑같은 글자**를 담고 있어도("부서 | 부서") 힌트로 보고 지운다. 매핑에서 따로 지정할 필요 없다.
-- `fields`는 고정 9항목 어휘만: `title, date, attendees, purpose, discussion, decisions, action_items, next_meeting, notes`.
-- `mode`:
-  - `inline` — 라벨 칸/문단("제목: __", "ㅇ (목적)")이나 값 전용 빈 자리. 스칼라(`title/date/attendees/purpose/next_meeting`)만 가능하며 라벨 뒤에 토큰이 붙어 라벨 서식이 보존된다. 데이터가 없으면 그 자리에 빨간 "입력필요"가 자동으로 들어간다(값이 있으면 값).
-  - `block` — 목록형(`discussion/decisions/action_items/notes`)이나 한 자리에 여러 항목을 넣을 때. 스크립트가 검증된 토큰 블록·섹션 라벨을 자동 생성한다. 대상 자리에 **라벨 텍스트가 있으면 지우지 않고**(inline과 동일) 블록을 그 **바로 뒤에 새 문단으로** 넣고, 빈 자리면 첫 줄을 그 자리에 넣어 서식을 유지한다(뒤 문단 밀림은 스크립트가 자동 처리). → 라벨 칸에 목록을 매핑해도 라벨이 보존된다. 논의 소제목은 "1. 주제"처럼 **자동 넘버링+굵게**로 렌더된다.
-  - `todo` — **양식에만 있고 대응 데이터가 없는 값 칸/컬럼**(작성자·회의장소·장소·미결사항·다음회의·첨부 등)에 빨간 굵은 "입력필요"를 넣는다. `fields` 불필요. **음성(minutes.json)에 없는 값 슬롯에만** 쓴다(값이 있으면 `inline`/`block`으로 채움).
-  - `literal` — 9항목 밖이지만 **원문(transcript)에 값이 있는** 양식 전용 칸(예: 원문에 언급된 장소)에 그 값을 평문으로 넣는다. `fields` 대신 `"text": "..."`.
-- `row_repeats` — **리스트형 자리가 담당/기한 등 컬럼으로 나뉜 "행 반복 표"**면 이것으로 각 컬럼에 펼친다. `mapping.json` 최상위 키 `row_repeats`에 `{"row": 데이터행, "field": "action_items", "cols": {"task":0,"owner":4,"due":3}}`를 넣으면 그 표에 `{%tr%}` 3행 구조가 주입돼 항목마다 한 행씩 채워진다(gridSpan 병합 유지, 값 없는 컬럼은 "입력필요"). 표가 아니라 단일 칸·문단이면 `row_repeats` 대신 `block`을 쓴다(예: 담당·기한을 텍스트 "(담당:… / 기한:…)"로).
-- **어디가 "값 자리"인지 먼저 정한다 — 이 판단이 매핑의 전부다.** 양식마다 라벨과 값의 관계가 다르므로 구조 JSON의 세 신호를 반드시 본다:
-  - **`shaded: true`인 칸은 라벨/헤더다 — 절대 값을 넣지 않는다.** 색은 가리지 않는다(회색이 흔할 뿐 파랑·노랑·테마색도 모두 `shaded: true`). 값은 같은 행의 색 없는 칸(`shaded: false`)이나 **바로 다음 빈 행**에 넣는다. 예: `[4,0] shaded "회 의 안 건"` → 회의 목적은 `[4,0]`이 아니라 `[5,0]`에. (색칠된 칸에 매핑하면 `apply_form_mapping.py`가 실패시킨다. `"allow_shaded": true` 우회는 **사용자가 그 칸에 넣으라고 명시적으로 요청했을 때만** 쓴다 — 자리를 못 찾았다고 임의로 붙이지 말 것. 넣을 곳이 없으면 그 항목은 다른 빈 자리에 `block`으로 옮기거나 매핑하지 않는다.) 단 **표 스타일에서 색이 오는 칸은 `shaded`로 안 잡히므로**, 라벨처럼 보이는 칸은 `text`와 `blocks`도 함께 보고 판단한다.
-  - 
-  
-  - **`blocks`로 표와 문단의 순서를 확인한다** — 표 마지막 행이 라벨(예: 음영 "회 의 내 용")로 끝나면 그 값 자리는 표 안이 아니라 **표 바로 뒤의 본문 문단**이다. 표만 보고 판단하면 라벨 칸에 본문을 박게 된다.
-- **채우는 순서 — 라벨↔값이 한 칸이면 `inline`, 라벨과 값이 다른 칸이면 값 칸에 `block`**: 라벨과 값이 같은 칸인 양식("제 목 : __")은 그 칸에 `inline`으로 넣어 라벨 서식을 살린다. 라벨이 행 전체를 차지하고 아래가 빈 행인 양식은 **아래 빈 행**에 넣는다. 그다음, 아무 글자도 없는 넓은 영역("회의 내용"·"향후 일정"·"비고" 등)에 목록형·전용 라벨이 없는 항목을 `block`으로 배치한다.
-- **글꼴·크기는 양식 것을 그대로 쓴다(자동)**: 채운 내용의 글꼴은 지정하지 않는다 — `apply_form_mapping.py`가 그 자리의 런 글꼴·크기를 읽어 새로 만드는 런에 입히고, 렌더 시 새로 생기는 런(굵은 소제목·빨간 "입력필요")은 `docx_postprocess.inherit_mark_fonts`가 저장 직전에 채운다. 양식이 글꼴을 스타일로만 지정했으면 스타일이 그대로 적용된다.
-- **계층 기호도 스크립트가 양식에 맞춰 자동 조정한다**: 회의록 내용은 `[섹션 제목]` / `1. 소제목` / `- 항목` 3계층으로 들어가는데, 양식이 그 자리에서 이미 쓰는 기호(글머리 "ㅇ"·"-", 자동 번호 "1.")와 겹치면 두 계층이 같은 기호가 돼 읽히지 않는다. `apply_form_mapping.py`가 **그 자리에 실제로 남을 기호를 보고** 사다리(소제목 `1.`→`□`→`◇`→`▪`, 항목 `-`→`·`→`‣`→`◦`)에서 겹치지 않는 기호를 고르고, 양식이 이미 한 계층을 쓰고 있으면 들여쓰기를 한 단 더 넣는다. 양식이 사다리를 다 쓰면(우리 계층이 더 깊으면) 마지막 기호로 떨어지되 들여쓰기로 계층이 유지된다. **매핑에서 기호를 지정할 필요 없다.**
-- **제목은 스크립트가 자동으로 붙인다(매핑에 쓰지 말 것)**: `block`은 field가 하나면 섹션 라벨을 생략한다 — 양식에 이미 "결정 사항:" 같은 라벨이 있을 때 중복을 피하려는 규칙이다. 반대로 **"ㅇ"·"-"·"1." 처럼 글머리 기호만 있거나 완전히 빈 자리**에 넣으면 제목 없이 내용만 남아 무슨 항목인지 알 수 없으므로, `apply_form_mapping.py`가 그 자리에 `[결정 사항]` 같은 제목을 자동으로 넣는다(글머리만 있으면 그 줄 뒤에, 빈 자리면 첫 줄로). **어떤 양식이든 적용되므로 매핑에서 `literal`로 제목을 따로 넣지 않는다** — 넣으면 제목이 두 번 붙는다.
-- **중복 금지 — 한 항목은 한 곳에만**: 이미 어느 칸/블록에 넣은 내용을 다른 칸이나 블록에 **반복해 넣지 않는다.** 같은 라벨이 여러 곳에 있으면(예: "제목:" 칸이 2개) 같은 값을 둘 다에 복사하지 말고 **각 칸에 서로 다른 알맞은 항목**을 배치한다(예: 위쪽 "제목:"→회의 제목(title), 회의내용 바로 위의 "제목:"→회의 목적/안건(purpose)). 한 칸에 purpose를 넣었으면 "회의 내용" 블록에서는 purpose를 빼서 중복을 없앤다. 마땅한 별도 항목이 없으면 그 라벨 칸은 빈칸으로 둔다.
-- **데이터 보존 우선**: 비어 있지 않은 9항목은 모두 어느 fill/paragraph엔가 (중복 없이) **한 번씩** 포함시킨다. 전용 자리가 없는 항목은 가장 어울리는 곳에 `block`으로 함께 넣는다(버리지 않는다).
-- **빈 값 슬롯은 "입력필요"로 — 음성에 없는 것만**: 양식이 값을 기대하는 칸/컬럼인데 대응 9항목 데이터가 없으면 `todo`를 매핑해 빨간 "입력필요"를 넣는다(작성자·회의장소·장소·미결사항·첨부·다음회의 등). 단 **9항목에 값이 있으면 절대 "입력필요"로 덮지 않는다** — 스크립트가 값 유무로 자동 처리하므로, `inline`/`block`에 매핑하면 값이 있을 땐 값, 없을 땐 "입력필요"가 들어간다. 원문에 값이 있는 양식 전용 칸은 `todo` 대신 `literal`로 그 값을 채운다.
-- 토큰 문법은 스크립트가 만든다 — `mapping.json`에는 토큰을 직접 쓰지 말고 field 이름(또는 `todo`/`literal`/`row_repeats` 지정)만 넣는다.
-
-#### 양식 템플릿 표시자 (스마트 토큰)
-사용자 양식에 아래 토큰을 넣으면 해당 자리에 회의록 내용이 채워진다.
-복사해 쓸 예시는 `templates/example-template.docx` (재생성:
-`python scripts/make_example_template.py`).
-
-| 토큰 | 채워지는 값 |
-|---|---|
-| `{{ title }}` | 회의 제목 |
-| `{{ date }}` | 회의 일시 (없으면 빈칸) |
-| `{{ purpose }}` | 회의 목적 |
-| `{{ next_meeting }}` | 다음 회의 (없으면 빈칸) |
-| `{{ attendees_joined }}` | 참석자 한 줄 결합 "홍길동, 김철수" |
-| `{% for a in attendees %}{{ a }}{% endfor %}` | 참석자 목록 반복 |
-| `{% for d in discussion %}{{ d.topic }} … {% for p in d.points %}{{ p }}{% endfor %}{% endfor %}` | 논의 주제·포인트 반복 |
-| `{% for x in decisions %}{{ x }}{% endfor %}` | 결정 사항 반복 |
-| 실행 항목 표 — 아래 "표 행 반복" 참고 (`action_items` 사용) | 실행 항목 표 — 행 자동 반복 |
-| `{% for n in notes %}{{ n }}{% endfor %}` | 기타·특이사항 반복 |
-
-**표 행 반복(`{%tr%}`)은 3행 구조로 넣는다** — 한 행에 for와 endfor를 함께 넣으면
-동작하지 않는다. 표에 다음 3개 행을 만들고, `{%tr%}`가 든 for·endfor 행은
-렌더 시 삭제되며 그 사이 데이터 행이 항목 수만큼 반복된다:
-
-| 할 일 | 담당자 | 기한 |
-|---|---|---|
-| `{%tr for a in action_items %}` | (빈칸) | (빈칸) |
-| `{{ a.task }}` | `{{ a.owner }}` | `{{ a.due }}` |
-| `{%tr endfor %}` | (빈칸) | (빈칸) |
-
-문단 단위로 반복시키려면 `{% %}` 대신 `{%p %}`를 쓴다.
-없는 값은 빈칸(스칼라)·행 미생성(목록)으로 처리되어 양식이 깔끔하게 유지된다.
-복사해 쓸 예시는 `templates/example-template.docx`.
-
-## 확장 (입력 어댑터)
-입력 방식 추가: `scripts/adapters/`에 `transcribe(source, **opts) -> str`를
-구현한 모듈을 만들고 `scripts/adapters/__init__.py`의 `REGISTRY`에 한 줄 등록.
-삭제: REGISTRY에서 한 줄 제거 + 모듈 삭제. [2]~[4] 단계는 수정 불필요.
+최종 `.docx` 경로를 사용자에게 안내한다. 입력 방식(어댑터) 확장은 `references/input-sources.md` 참고.

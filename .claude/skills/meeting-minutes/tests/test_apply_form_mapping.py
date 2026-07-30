@@ -405,6 +405,36 @@ def test_topic_marker_switches_when_template_numbers(tmp_path):
     assert "{{r d.topic_rt }}" not in texts       # 넘버링 토큰은 안 씀
 
 
+def test_topic_keeps_numbering_when_template_number_disappears(tmp_path):
+    """양식 자동번호가 렌더 시 사라지는 자리면 주제 넘버링("1. 주제")을 그대로 쓴다.
+
+    빈 자동번호 문단에는 `{%p for … %}` 태그가 들어가고 그 문단은 렌더에서 삭제된다
+    — 번호가 남지 않으므로 겹칠 일이 없는데 기호(`□`)로 내려가면 넘버링을 헛되게
+    버린다. `auto_label: false`로 제목을 끈 자리에서 실제로 이 손해가 났다.
+    """
+    from docx.oxml.ns import qn
+
+    doc = Document()
+    target = doc.add_paragraph("")  # 글자 없는 자동번호 문단 = 값 자리
+    pPr = target._p.get_or_add_pPr()
+    numPr = pPr.makeelement(qn("w:numPr"), {})
+    numId = pPr.makeelement(qn("w:numId"), {})
+    numId.set(qn("w:val"), "1")
+    numPr.append(numId)
+    pPr.append(numPr)
+    form = tmp_path / "autonum.docx"
+    doc.save(str(form))
+
+    out = tmp_path / "out.docx"
+    mapping = {"paragraphs": [
+        {"para": 0, "mode": "block", "fields": ["discussion"], "auto_label": False},
+    ]}
+    apply_mapping(str(form), mapping, str(out))
+    texts = [p.text.strip() for p in Document(str(out)).paragraphs]
+    assert "{{r d.topic_rt }}" in texts             # 넘버링 토큰을 씀
+    assert "□ {{r d.topic_plain_rt }}" not in texts  # 기호로 내려가지 않음
+
+
 def test_marker_ladder_falls_back_when_exhausted(tmp_path):
     """양식이 사다리를 다 쓰면 마지막 기호로 떨어진다(들여쓰기로 계층 유지)."""
     from apply_form_mapping import _ITEM_LADDER, _choose_markers
@@ -842,3 +872,87 @@ def test_end_to_end_empty_list_leaves_blank(tmp_path):
     lines = _cell_texts(final, row=3, col=0)
     # notes가 비면 반복 문단이 생성되지 않아 " - ..." 라인이 없다
     assert not any(line.strip().startswith("-") for line in lines)
+
+
+# --- 자동 섹션 제목: 옆 칸 라벨 배치 ------------------------------------------
+def _make_label_value_form(path):
+    """`라벨 칸 | 값 칸` 배치의 표 양식 — 한국 회의록 양식의 표준 구조."""
+    doc = Document()
+    table = doc.add_table(rows=2, cols=2)
+    table.cell(0, 0).text = "논의 내용"
+    table.cell(1, 0).text = "결정 사항"
+    doc.save(str(path))
+
+
+def test_adjacent_label_cell_suppresses_auto_title(tmp_path):
+    """옆 칸이 라벨이면 제목을 붙이지 않는다 — "논의 내용 | [논의 내용]" 중복 방지."""
+    form = tmp_path / "labeled_row.docx"
+    _make_label_value_form(form)
+    out = tmp_path / "out.docx"
+    mapping = {"fills": [
+        {"row": 0, "col": 1, "mode": "block", "fields": ["discussion"]},
+        {"row": 1, "col": 1, "mode": "block", "fields": ["decisions"]},
+    ]}
+    apply_mapping(str(form), mapping, str(out))
+    assert not any("[논의 내용]" in t for t in _cell_texts(out, row=0, col=1))
+    assert not any("[결정 사항]" in t for t in _cell_texts(out, row=1, col=1))
+    # 라벨 칸은 그대로 보존되고 내용 블록은 값 칸에 들어간다.
+    assert _cell_texts(out, row=0, col=0) == ["논의 내용"]
+    assert any("{%p for d in discussion_rt %}" in t for t in _cell_texts(out, row=0, col=1))
+
+
+def test_unlabeled_row_still_gets_auto_title(tmp_path):
+    """행 전체에 라벨이 없으면 제목은 여전히 자동으로 붙는다(정체불명 방지)."""
+    doc = Document()
+    doc.add_table(rows=1, cols=2)  # 라벨 없는 빈 표
+    form = tmp_path / "bare_row.docx"
+    doc.save(str(form))
+    out = tmp_path / "out.docx"
+    mapping = {"fills": [{"row": 0, "col": 1, "mode": "block", "fields": ["decisions"]}]}
+    apply_mapping(str(form), mapping, str(out))
+    assert _cell_texts(out, row=0, col=1)[0] == "[결정 사항]"
+
+
+def test_auto_label_false_turns_title_off(tmp_path):
+    """라벨이 위쪽 행에 있는 양식은 `auto_label: false`로 제목을 끈다."""
+    doc = Document()
+    table = doc.add_table(rows=2, cols=1)
+    table.cell(0, 0).text = "회 의 내 용"  # 라벨 행
+    form = tmp_path / "label_above.docx"
+    doc.save(str(form))
+    out = tmp_path / "out.docx"
+    mapping = {"fills": [
+        {"row": 1, "col": 0, "mode": "block", "fields": ["discussion"],
+         "auto_label": False},
+    ]}
+    apply_mapping(str(form), mapping, str(out))
+    assert not any("[논의 내용]" in t for t in _cell_texts(out, row=1, col=0))
+
+
+def test_auto_label_true_forces_title(tmp_path):
+    """옆 칸 라벨이 이 항목과 무관하면 `auto_label: true`로 제목을 강제한다."""
+    form = tmp_path / "forced.docx"
+    _make_label_value_form(form)
+    out = tmp_path / "out.docx"
+    mapping = {"fills": [
+        {"row": 0, "col": 1, "mode": "block", "fields": ["notes"], "auto_label": True},
+    ]}
+    apply_mapping(str(form), mapping, str(out))
+    assert _cell_texts(out, row=0, col=1)[0] == "[기타·특이사항]"
+
+
+def test_auto_label_false_works_on_paragraph_slot(tmp_path):
+    """본문 문단도 `auto_label: false`로 제목을 끌 수 있다(앞 문단이 라벨인 양식)."""
+    doc = Document()
+    doc.add_paragraph("회의 내용")  # 라벨 문단
+    doc.add_paragraph("")           # 값 자리
+    form = tmp_path / "para_label_above.docx"
+    doc.save(str(form))
+    out = tmp_path / "out.docx"
+    mapping = {"paragraphs": [
+        {"para": 1, "mode": "block", "fields": ["decisions"], "auto_label": False},
+    ]}
+    apply_mapping(str(form), mapping, str(out))
+    texts = [p.text for p in Document(str(out)).paragraphs]
+    assert "[결정 사항]" not in texts
+    assert texts[0] == "회의 내용"

@@ -100,3 +100,29 @@ def test_singleline_filename_still_resolved(tmp_path, monkeypatch):
     monkeypatch.setenv("MEETING_INPUT_DIRS", str(tmp_path))
     monkeypatch.chdir(tmp_path)
     assert load_meeting_text("note2.txt") == "회의 내용"
+
+
+def test_missing_filename_fails_loudly(tmp_path, monkeypatch):
+    # 파일 확장자로 끝나는 한 줄 입력은 "파일을 주려 한 것"이므로 못 찾으면 실패한다.
+    # 조용히 통과하면 파일명 한 줄이 회의 원문이 되어 회의록 전체가 그걸로 만들어진다.
+    monkeypatch.setenv("MEETING_INPUT_DIRS", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(FileNotFoundError) as exc:
+        load_meeting_text("없는회의록.txt")
+    assert "검색한 위치" in str(exc.value)
+
+
+def test_missing_audio_filename_also_fails(tmp_path, monkeypatch):
+    # 오디오·문서 확장자도 같다 — text 소스에 잘못 준 파일명이 원문으로 둔갑하지 않는다.
+    monkeypatch.setenv("MEETING_INPUT_DIRS", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    for name in ("없는녹취.m4a", "없는양식.docx"):
+        with pytest.raises(FileNotFoundError):
+            load_meeting_text(name)
+
+
+def test_extensionless_string_is_still_transcript(tmp_path, monkeypatch):
+    # 확장자가 없는 한 줄 문자열은 붙여넣은 원문으로 간주한다(오탐 방지).
+    monkeypatch.setenv("MEETING_INPUT_DIRS", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    assert load_meeting_text("오늘 회의 결론 정리") == "오늘 회의 결론 정리"
