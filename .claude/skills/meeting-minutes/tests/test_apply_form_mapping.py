@@ -405,6 +405,54 @@ def test_topic_marker_switches_when_template_numbers(tmp_path):
     assert "{{r d.topic_rt }}" not in texts       # 넘버링 토큰은 안 씀
 
 
+def test_open_issues_block_is_supported(tmp_path):
+    """양식의 "미결 사항" 칸에 open_issues를 넣을 수 있다(todo로 비우지 않는다)."""
+    doc = Document()
+    doc.add_paragraph("미결 사항:")
+    form = tmp_path / "open.docx"
+    doc.save(str(form))
+    out = tmp_path / "out.docx"
+    mapping = {"paragraphs": [{"para": 0, "mode": "block", "fields": ["open_issues"]}]}
+    apply_mapping(str(form), mapping, str(out))
+    texts = [p.text.strip() for p in Document(str(out)).paragraphs]
+    assert "{%p for x in open_issues %}" in texts
+    assert "{{r todo }}" not in " ".join(texts)  # 데이터 자리를 "입력필요"로 덮지 않음
+
+
+def test_attendee_count_gap_filled(tmp_path):
+    """양식이 비워 둔 "총  명"에 참석인원 수 토큰이 끼워진다 — 명단은 뒤에 이어 붙는다.
+
+    워드가 한 문장을 여러 런으로 쪼개 둔 실제 양식(`총`/`  `/`명`)을 그대로 재현한다
+    — 런 하나만 보는 구현은 이 빈칸을 놓친다.
+    """
+    doc = Document()
+    p = doc.add_paragraph()
+    for chunk in ["ㅇ", " (", "참석인원", ") ", "총", "  ", "명", " ", "참석"]:
+        p.add_run(chunk)
+    form = tmp_path / "count.docx"
+    doc.save(str(form))
+    out = tmp_path / "out.docx"
+    mapping = {"paragraphs": [{"para": 0, "mode": "inline", "fields": ["attendees"]}]}
+    apply_mapping(str(form), mapping, str(out))
+    text = Document(str(out)).paragraphs[0].text
+    assert "총 {{ attendee_count }}명 참석" in text
+    assert text.rstrip().endswith("{{r attendees_rt }}")
+
+
+def test_attendee_count_gap_untouched_without_gap(tmp_path):
+    """빈칸이 없는 자리는 건드리지 않는다 — "총명"·"참석자:"에 수를 밀어 넣지 않는다."""
+    doc = Document()
+    doc.add_paragraph("참 석 자 :")
+    form = tmp_path / "nogap.docx"
+    doc.save(str(form))
+    out = tmp_path / "out.docx"
+    mapping = {"paragraphs": [{"para": 0, "mode": "inline", "fields": ["attendees"]}]}
+    apply_mapping(str(form), mapping, str(out))
+    text = Document(str(out)).paragraphs[0].text
+    assert "attendee_count" not in text
+    assert text == "참 석 자 : {{r attendees_rt }}"
+
+
 def test_topic_keeps_numbering_when_template_number_disappears(tmp_path):
     """양식 자동번호가 렌더 시 사라지는 자리면 주제 넘버링("1. 주제")을 그대로 쓴다.
 

@@ -71,8 +71,11 @@ def build_context(data: dict) -> dict:
         "next_meeting": data.get("next_meeting") or "",
         "attendees": data["attendees"],
         "attendees_joined": attendees_joined,
+        # 참석인원 수는 세지 않고 attendees 길이에서 얻는다 — 명단과 어긋날 수 없다.
+        "attendee_count": len(data["attendees"]),
         "discussion": data["discussion"],
         "decisions": data["decisions"],
+        "open_issues": data["open_issues"],
         "action_items": [
             {"task": a["task"], "owner": a["owner"] or "-", "due": a["due"] or "-"}
             for a in data["action_items"]

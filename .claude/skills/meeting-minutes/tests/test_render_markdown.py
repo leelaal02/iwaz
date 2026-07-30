@@ -25,6 +25,22 @@ def test_section_order():
     assert md.index("## 다음 회의 일정") < md.index("## 기타·특이사항")
 
 
+def test_open_issues_section_sits_between_decisions_and_actions():
+    """미결 사항은 결정 사항 바로 뒤 — "정해진 것 / 안 정해진 것"이 붙어 읽혀야 한다."""
+    md = render_markdown(_sample())
+    assert "## 미결 사항" in md
+    assert md.index("## 결정 사항") < md.index("## 미결 사항") < md.index("## 실행 항목")
+    assert "- 실시간 STT 도입 시점 미정 (4분기 재논의)" in md
+
+
+def test_empty_open_issues_renders_none_marker():
+    """미결이 없는 회의도 항목 자체는 남긴다 — 빠뜨린 것과 없는 것을 구분."""
+    data = _sample()
+    data["open_issues"] = []
+    md = render_markdown(data)
+    assert "## 미결 사항\n- (없음)" in md
+
+
 def test_purpose_and_notes_content():
     md = render_markdown(_sample())
     assert "3분기 제품 로드맵과 STT 연동 범위 확정" in md   # purpose

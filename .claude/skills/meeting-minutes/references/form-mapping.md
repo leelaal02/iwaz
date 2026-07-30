@@ -26,7 +26,9 @@ SKILL.md [4] 단계에서 `inspect_template.py`가 `has_tokens: false`를 낸 �
 - `fills`는 표 칸을 `{"row", "col", "mode", "fields"}`로, `paragraphs`는 본문 문단을 `{"para", "mode", "fields"}`로 지정한다. `para`는 inspect의 `paragraphs[].index`(= `doc.paragraphs` 위치)와 일치.
 - **표가 여러 개면 항목마다 `"table": n`을 준다**(생략 시 최상위 `table`, 기본 0). 표 5개짜리 양식도 한 번의 실행으로 채운다 — 표별로 나눠 여러 번 실행할 필요 없다.
 - `drop_rows` — **양식이 깔아 둔 예시 행이 데이터보다 많이 남을 때** 지운다. `{"table": 3, "rows": [2,3,4]}` 형태로 최상위 `drop_rows`에 넣으면 그 행들이 삭제된다(다른 인덱스는 원본 기준 그대로 쓰면 된다 — 삭제는 맨 마지막에 일어난다). 결정사항·실행항목 표처럼 빈 예시 행이 4~5줄 깔린 양식에 쓴다.
-- `fields`는 고정 9항목 어휘만: `title, date, attendees, purpose, discussion, decisions, action_items, next_meeting, notes`.
+- `fields`는 고정 10항목 어휘만: `title, date, attendees, purpose, discussion, decisions, open_issues, action_items, next_meeting, notes`.
+- 양식에 **미결/보류 칸**(`미결 사항`·`보류`·`추후 검토`)이 있으면 `todo`가 아니라 `open_issues`를 넣는다 — 데이터가 있는데 "입력필요"로 비우는 실수가 가장 잦은 자리다.
+- 양식이 인원수를 비워 둔 자리("총  명 참석")는 참석자를 `inline`으로 매핑하면 **빈칸에 수가 자동으로 채워진다** — 매핑에서 따로 지정하지 않는다.
 - 항목별 선택 키 — `allow_shaded`(음영 칸 우회, [값 자리 판정](#값-자리-판정--이-판단이-매핑의-전부)) · `auto_label`(섹션 제목 켜기/끄기, [스크립트가 자동 처리하는 것](#스크립트가-자동-처리하는-것-매핑에-쓰지-말-것)). 둘 다 기본 동작이 맞을 때는 쓰지 않는다.
 - 토큰 문법은 스크립트가 만든다 — `mapping.json`에는 토큰을 직접 쓰지 말고 field 이름(또는 `todo`/`literal`/`row_repeats` 지정)만 넣는다.
 

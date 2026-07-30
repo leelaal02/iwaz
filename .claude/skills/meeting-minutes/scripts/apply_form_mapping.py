@@ -45,6 +45,7 @@ _SECTION_LABEL = {
     "next_meeting": "[다음 회의]",
     "discussion": "[논의 내용]",
     "decisions": "[결정 사항]",
+    "open_issues": "[미결 사항]",
     "action_items": "[실행 항목]",
     "notes": "[기타·특이사항]",
 }
@@ -96,6 +97,11 @@ def _list_block(field: str, markers: dict) -> list:
         ],
         "decisions": [ # 결정 사항
             "{%p for x in decisions %}",
+            f" {item} {{{{ x }}}}",
+            "{%p endfor %}",
+        ],
+        "open_issues": [ # 미결 사항
+            "{%p for x in open_issues %}",
             f" {item} {{{{ x }}}}",
             "{%p endfor %}",
         ],
@@ -244,6 +250,40 @@ def _append_token(paragraph, token: str) -> None:
     run = paragraph.add_run(sep + token)
     apply_font(run, font)
     mark_font(paragraph, font)
+
+
+# 양식이 인원수를 적으라고 비워 둔 자리("총  명 참석"). 숫자만 빠져 있어 값 토큰을
+# 뒤에 붙이는 것으로는 못 채운다 — 빈칸 자체에 수를 끼워 넣어야 문장이 완성된다.
+_COUNT_GAP = re.compile(r"총(\s+)명")
+
+
+def _fill_attendee_count_gap(paragraph) -> bool:
+    """"총 __ 명" 빈칸에 참석인원 수 토큰을 끼워 넣는다(참석자 inline 자리에서만).
+
+    수는 세지 않고 `attendees` 길이에서 나오므로(build_context) 명단과 어긋날 수
+    없다. 공백이 없는 "총명"은 빈칸이 아니므로 건드리지 않는다.
+
+    **문단 전체 텍스트에서 찾는다** — 워드는 한 문장을 여러 런으로 쪼개 두는 일이
+    잦아("총"/"  "/"명" 3개 런) 런 하나만 보면 빈칸을 놓친다. 찾은 구간에 걸친
+    런들만 다시 쓰고 나머지 런은 건드리지 않아 양식 서식이 그대로 남는다.
+    """
+    m = _COUNT_GAP.search(paragraph.text)
+    if not m:
+        return False
+    start, end = m.span()
+    filled = False
+    pos = 0
+    for run in paragraph.runs:
+        r_start, r_end = pos, pos + len(run.text)
+        pos = r_end
+        if r_end <= start or r_start >= end:  # 매치 밖 런은 그대로 둔다
+            continue
+        head = run.text[: max(0, start - r_start)]
+        tail = run.text[end - r_start :] if r_end > end else ""
+        # 토큰은 첫 런에만 넣고(그 런의 글꼴을 물려받는다), 나머지 걸친 런은 비운다.
+        run.text = head + ("" if filled else "총 {{ attendee_count }}명") + tail
+        filled = True
+    return filled
 
 
 def _copy_paragraph_format(source, target) -> None:
@@ -624,7 +664,10 @@ def _apply_mode(entry: dict, paragraph, where: str, block_apply) -> None:
     """
     mode = _require(entry, "mode", where)
     if mode == "inline":
-        _append_token(paragraph, inline_tokens(_require(entry, "fields", where)))
+        fields = _require(entry, "fields", where)
+        if "attendees" in fields:  # "총 __ 명" 빈칸이 있으면 인원수부터 채운다
+            _fill_attendee_count_gap(paragraph)
+        _append_token(paragraph, inline_tokens(fields))
     elif mode == "block":
         block_apply(_require(entry, "fields", where))
     elif mode == "todo":  # 라벨만 있고 데이터가 없는 자리 → 빨간 "입력필요"

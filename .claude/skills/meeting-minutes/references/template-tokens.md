@@ -16,9 +16,11 @@
 | `{{ purpose }}` | 회의 목적 |
 | `{{ next_meeting }}` | 다음 회의 (없으면 빈칸) |
 | `{{ attendees_joined }}` | 참석자 한 줄 결합 "홍길동, 김철수" |
+| `{{ attendee_count }}` | 참석 인원수(숫자) — "총 `{{ attendee_count }}`명 참석"처럼 문장에 끼워 쓴다. 명단 길이에서 나오므로 참석자와 어긋나지 않는다 |
 | `{% for a in attendees %}{{ a }}{% endfor %}` | 참석자 목록 반복 |
 | `{% for d in discussion %}{{ d.topic }} … {% for p in d.points %}{{ p }}{% endfor %}{% endfor %}` | 논의 주제·포인트 반복 |
 | `{% for x in decisions %}{{ x }}{% endfor %}` | 결정 사항 반복 |
+| `{% for x in open_issues %}{{ x }}{% endfor %}` | 미결 사항 반복 |
 | 실행 항목 표 — 아래 "표 행 반복" 참고 (`action_items` 사용) | 실행 항목 표 — 행 자동 반복 |
 | `{% for n in notes %}{{ n }}{% endfor %}` | 기타·특이사항 반복 |
 
